@@ -27,7 +27,7 @@
 
 extern logger_t logger;
 extern writer_t writer;
-
+extern freezer_t freezer;
 
 //
 // param_t 
@@ -447,7 +447,7 @@ void cmd_t::signal_alias( const std::string & s )
   // but with case-insensitive matches
   
   // x|Y|Y
-    
+
   // format canonical|alias1|alias2 , etc.
   std::vector<std::string> tok = Helper::quoted_parse( s , "|" );    
   if ( tok.size() < 2 ) Helper::halt( "bad format for signal alias:  canonical|alias 1|alias 2\n" + s );
@@ -939,6 +939,29 @@ bool cmd_t::eval( edf_t & edf )
       
       if ( is( c, "ENDIF" ) || is( c, "FI" ) )
 	continue;
+
+
+      //
+      // Is the current mask empty? if so, skip unless this is a THAW
+      //
+
+      if ( globals::empty )
+	{
+	  bool skip = true;
+	  if      ( is( c, "THAW" ) ) skip = false;
+	  else if ( is( c, "HEADERS" ) ) skip = false;
+	  else if ( is( c, "SET-VAR" ) ) skip = false;
+	  else if ( is( c, "SET-HEADERS" ) ) skip = false;
+	  else if ( is( c, "DESC" ) ) skip = false;
+	  else if ( is( c, "ALIASES" ) ) skip = false;
+	  else if ( is( c, "TYPES" ) ) skip = false;
+	  if ( skip )
+	    {
+	      logger << "  ** skipping " << cmd(c) << " as there are no unmasked records\n"; 
+	      continue;
+	    }
+	}
+      
       
       //
       // Process command
@@ -957,6 +980,9 @@ bool cmd_t::eval( edf_t & edf )
       
       if      ( is( c, "WRITE" ) )        proc_write( edf, param(c) );
       else if ( is( c, "EDF" ) )          proc_force_edf( edf , param(c) );
+      else if ( is( c, "EDF-" ) )         proc_edf_minus( edf , param(c) );
+      else if ( is( c, "EDF-MINUS" ) )    proc_edf_minus( edf , param(c) );
+      else if ( is( c, "SET-TIMESTAMPS" ) ) proc_set_timestamps( edf , param(c) );
       else if ( is( c, "SUMMARY" ) )      proc_summaries( edf , param(c) );
       else if ( is( c, "HEADERS" ) )      proc_headers( edf , param(c) );
       else if ( is( c, "ALIASES" ) )      proc_aliases( edf , param(c) );
@@ -976,6 +1002,7 @@ bool cmd_t::eval( edf_t & edf )
       else if ( is( c, "RECTIFY" ) )      proc_rectify( edf , param(c) );
       else if ( is( c, "REVERSE" ) )      proc_reverse( edf , param(c) );
       else if ( is( c, "CANONICAL" ) )    proc_canonical( edf , param(c) );
+      else if ( is( c, "REMAP" ) )        proc_remap_annots( edf , param(c) );
       else if ( is( c, "uV" ) )           proc_scale( edf , param(c) , "uV" ); 
       else if ( is( c, "mV" ) )           proc_scale( edf , param(c) , "mV" );
       else if ( is( c, "MINMAX" ) )       proc_minmax( edf , param(c) );
@@ -1016,7 +1043,8 @@ bool cmd_t::eval( edf_t & edf )
       else if ( is( c, "SPANNING" ) ) proc_list_spanning_annots( edf, param(c) );
       //else if ( is( c, "COUNT-ANNOTS" ) ) proc_list_annots( edf , param(c) ); // REDUNDANT; use ANNOTS epoch instead
       else if ( is( c, "MEANS" ) )        proc_sig_annot_mean( edf, param(c) );
-		    
+      else if ( is( c, "TABULATE" ) )     proc_sig_tabulate( edf, param(c) );
+
       else if ( is( c, "MATRIX" ) )       proc_epoch_matrix( edf , param(c) );
       else if ( is( c, "HEAD" ) )         proc_head_matrix( edf , param(c) );
 
@@ -1052,6 +1080,9 @@ bool cmd_t::eval( edf_t & edf )
       else if ( is( c, "EVAL" ) )         proc_eval( edf, param(c) );
       else if ( is( c, "MASK" ) )         proc_mask( edf, param(c) );
 
+      else if ( is( c, "FREEZE" ) )       proc_freeze( edf , param(c) );
+      else if ( is( c, "THAW" ) )         proc_thaw( edf , param(c) );
+      
       else if ( is( c, "FILE-MASK" ) )    proc_file_mask( edf , param(c) ); // not supported/implemented
       else if ( is( c, "DUMP-MASK" ) )    proc_dump_mask( edf, param(c) );
       else if ( is( c, "ANNOT-MASK" ) )   proc_annot_mask( edf, param(c) );
@@ -1065,6 +1096,7 @@ bool cmd_t::eval( edf_t & edf )
       
       else if ( is( c, "FILTER" ) )       proc_filter( edf, param(c) );      
       else if ( is( c, "FILTER-DESIGN" )) proc_filter_design( edf, param(c) );
+      else if ( is( c, "MOVING-AVERAGE" )) proc_moving_average( edf, param(c) );
       else if ( is( c, "CWT-DESIGN" ) )   proc_cwt_design( edf , param(c) );
       else if ( is( c, "CWT" ) )          proc_cwt( edf , param(c) );
       else if ( is( c, "HILBERT" ) )      proc_hilbert( edf , param(c) );
@@ -1325,15 +1357,20 @@ void proc_self_suds( edf_t & edf , param_t & param  )
 
   // set options
   suds_t::set_options( param );  
-
+  
+  // force a reload (used in moonlight/R mode)
+  if ( param.has( "force-reload" ) )
+    suds_t::model.init();
+  
   // load model, if not already done
-
+  //  or, in R mode, force load each time...
+  
   if ( ! suds_t::model.loaded() )
     {
       suds_t::model.read( param.has( "model" ) ? param.value( "model" ) : "_1" , 
 			  param.has( "read-weights" ) ? param.value( "read-weights" ) : "" ,
-			  param.has( "write-weights" ) ? param.value( "write-weights" ) : ""  
-			  );
+			  param.has( "write-weights" ) ? param.value( "write-weights" ) : "" ,  
+			  param.has( "sig" ) && param.value( "sig" ) != "*" ? param.value( "sig") : "C4_M1" ) ;
     }
   
   suds_indiv_t self;
@@ -1352,7 +1389,10 @@ void proc_place_soap( edf_t & edf , param_t & param  )
   // load model, if not already done (or default) (_1 or _2)
 
   if ( ! suds_t::model.loaded() )
-    suds_t::model.read( param.has( "model" ) ? param.value( "model" ) : "_1" );
+    suds_t::model.read( param.has( "model" ) ? param.value( "model" ) : "_1" , 
+			"" , "" ,
+			param.has( "sig" ) && param.value( "sig" ) != "*" ? param.value( "sig") : "C4_M1"
+			);
   
   suds_indiv_t self;
   self.place( edf , param , stagefile );
@@ -1396,7 +1436,10 @@ void proc_rebase_soap( edf_t & edf , param_t & param  )
   
   // load model, if not already done
   if ( ! suds_t::model.loaded() )
-    suds_t::model.read( param.has( "model" ) ? param.value( "model" ) : "_1" );
+    suds_t::model.read( param.has( "model" ) ? param.value( "model" ) : "_1" ,
+                        "" , "" ,
+			param.has( "sig" ) && param.value( "sig" ) != "*" ? param.value( "sig") : "C4_M1"
+                        );
 
   suds_indiv_t self;
   self.rebase( edf , param , newlen );
@@ -1499,7 +1542,17 @@ void proc_pops( edf_t & edf , param_t & param )
   //
 
   pops_t pops( param );   
-  
+
+  //
+  // force new specs? (for use w/ R/moonlight)
+  //
+
+  if ( param.has( "force-reload" ) )
+    {
+      pops_t::specs.init();
+      pops_t::specs.init_default();     
+    }
+
   //
   // set up features ('.' = use internal defaults)
   //
@@ -1615,6 +1668,12 @@ void proc_artifacts( edf_t & edf , param_t & param )
 //   //band_pass_filter( edf , param );
 // }
 
+// MOVING-AVERAGE
+
+void proc_moving_average( edf_t & edf , param_t & param )
+{
+  dsptools::movavg( edf , param );  
+}
 
 // FILTER : general FIR
 
@@ -1989,8 +2048,6 @@ void proc_anon( edf_t & edf , param_t & param )
       logger << " setting ID to " << edf.id << " and start date to '01.01.85' for " 
 	     << edf.filename << "\n";
       
-      edf.header.patient_id = edf.id;
-      
       edf.header.patient_id = edf.header.edfplus ? edf.id + " X X X" : edf.id;
       
     }
@@ -2195,6 +2252,23 @@ void proc_slowwaves( edf_t & edf , param_t & param )
   
 }
 
+
+// EDF-MINUS : convert from EDF+D to EDF
+//   adding padding (zeros for annots)
+//   ajusting annotations
+//   and adding in a new "gap" annot
+
+void proc_edf_minus( edf_t & edf , param_t & param )
+{
+  edf.edf_minus();
+}
+
+// SET-TIMESTAMPS
+void proc_set_timestamps( edf_t & edf , param_t & param )
+{
+  edf.set_timestamps( param );
+}
+
 // EDF : convert from EDF+D to EDF or EDF+C
 //               or EDF+C to EDF
 
@@ -2272,9 +2346,11 @@ void proc_write( edf_t & edf , param_t & param )
   if ( Helper::file_extension( filename, "edf.gz" ) || 
        Helper::file_extension( filename, "EDF.GZ" ) ) 
     filename = filename.substr(0 , filename.size() - 7 );
-  
+
   // make edf-tag optional
-  if ( param.has( "edf-tag" ) ) 
+  if ( param.has( "edf" ) )
+    filename = param.requires( "edf" ) + ".edf" ;
+  else if ( param.has( "edf-tag" ) ) 
     filename += "-" + param.requires( "edf-tag" ) + ".edf";
   else
     {
@@ -2354,12 +2430,19 @@ void proc_write( edf_t & edf , param_t & param )
   // if a mask has been set, this will restructure the mask
   edf.restructure(); 
   
+
   //
   // Force as EDF (i.e. even if restructured), and set starttime = 0;
   //
 
-  bool write_as_edf = param.has( "force-edf" );
-  
+  int write_as_edf = param.has( "force-edf" ) ? 1 : 0 ;
+
+  if ( param.has( "null-starttime" ) )
+    {
+      if ( ! write_as_edf )
+	Helper::halt( "null-starttime option can only be specified with force-edf" );
+      write_as_edf = 2;
+    }  
   
   //
   // Do not write 'quasi-discontinuous' (i.e. single-segment EDF+D) as EDF+D
@@ -2368,12 +2451,40 @@ void proc_write( edf_t & edf , param_t & param )
 
   bool always_EDFD = param.has( "EDF+D" );
 
+  //
+  // Specify order and number of channels in the new EDF?
+  //
+  
+  std::vector<int> channels;
+  
+  const bool set_chorder = param.has( "channels" );
+  
+  if ( set_chorder )
+    {
+      std::vector<std::string> str = param.strvector( "channels" );
+      std::set<int> cuniq;
+      // check each exists
+      for (int s=0; s<str.size(); s++)
+	{
+	  if ( ! edf.header.has_signal( str[s] ) ) 
+	    Helper::halt( "could not find requested channel " + str[s] );
+	  const int slot = edf.header.signal( str[s] );
+	  channels.push_back( slot );
+	  cuniq.insert( slot );
+	}
 
+      if ( cuniq.size() < channels.size() )
+	logger << "  exporting " << cuniq.size() << " unique signals ("<< channels.size() << " total) from " << edf.header.ns << " originals\n";
+      else
+	logger << "  exporting " << channels.size() << " signals from " << edf.header.ns << " originals\n";
+    }
+
+  
   //
   // Save data (write_as_edf flag forces starttime to 00.00.00 if really EDF+D)
   //
   
-  bool saved = edf.write( filename , edfz , write_as_edf , always_EDFD );
+  bool saved = edf.write( filename , edfz , write_as_edf , always_EDFD , set_chorder ? &channels : NULL );
   
   if ( ! saved ) 
     Helper::halt( "problem trying to save " + filename );
@@ -2627,6 +2738,7 @@ void proc_epoch( edf_t & edf , param_t & param )
 	  writer.value( "START"    , interval.start_sec() );
 	  writer.value( "MID"      , interval.mid_sec() );
 	  writer.value( "STOP"     , interval.stop_sec() );
+	  writer.value( "TP" , interval.as_tp_string() );
 	  
 	  // original time-points
 	  
@@ -2713,6 +2825,42 @@ void proc_epoch_mask( edf_t & edf , param_t & param )
  
   edf.timeline.apply_simple_epoch_mask( vars , onelabel , param.has("if") );  
 
+}
+
+// FREEZE : make a copy of the current (internal) EDF 
+
+void proc_freeze( edf_t & edf , param_t & param )
+{
+  
+  if ( ! param.single() )
+    Helper::halt( "FREEZE requires a single argument" );
+
+  // take either FREEZE tag=name or  FREEZE name
+  const std::string freeze_name = param.has( "tag" ) ? param.value( "tag" ) : param.single_value() ;
+
+  if ( freeze_name == "remove" ) Helper::halt( "cannot use 'remove' as a freeze name" );  
+  
+  freezer.freeze( freeze_name , edf );
+
+}
+
+// THAW : bring back and replace current EDF
+void proc_thaw( edf_t & edf , param_t & param )
+{
+
+  const bool remove = param.has( "remove" ) ? param.yesno( "remove" ) : false ;
+
+  if ( remove )
+    {
+      freezer.thaw( param.requires( "tag" ) , &edf , remove );  
+    }
+  else
+    {
+      // can allow single arg context here (if not also using 'remove')
+      const std::string freeze_name = param.has( "tag" ) ? param.value( "tag" ) : param.single_value() ;
+      freezer.thaw( freeze_name , &edf , false );
+    }
+  
 }
 
 // EPOCH-ANNOT : directly apply epoch-level annotations from the command line
@@ -2802,17 +2950,15 @@ void proc_annot_mask( edf_t & edf , param_t & param )
 
 void proc_dump_mask( edf_t & edf , param_t & param )
 {
-  if ( ! param.has("tag") )
-    {
-      edf.timeline.dumpmask();
-      return;
-    }
-
-  // otherwise, create an ANNOT file from the MASK, i.e. for viewing
-  std::string tag = param.requires( "tag" );
-  std::string path = param.has( "path" ) ? param.value("path") : ".";
-  bool no_id = ! param.has( "no-id" );
-  edf.timeline.mask2annot( path, tag , no_id ); 
+  
+  edf.timeline.dumpmask( param );
+  
+  // nb. dumpmask() now allows adding annots +/- output
+  // // otherwise, create an ANNOT file from the MASK, i.e. for viewing
+  // std::string tag = param.requires( "tag" );
+  // std::string path = param.has( "path" ) ? param.value("path") : ".";
+  // bool no_id = ! param.has( "no-id" );
+  // edf.timeline.mask2annot( path, tag , no_id ); 
 }
 
 // CHEP : dump, or convert from CHEP->MASK
@@ -2882,6 +3028,12 @@ void proc_sig_annot_mean( edf_t & edf , param_t & param )
   edf.timeline.signal_means_by_annot( param );
 }
 
+// TABULATE : assume discrete values for a signal, and get counts
+
+void proc_sig_tabulate( edf_t & edf , param_t & param )
+{
+  edf.tabulate( param );
+}
 
 // ANNOTS : list all annotations
 
@@ -2904,7 +3056,7 @@ void proc_list_spanning_annots( edf_t & edf , param_t & param )
 
 void proc_timetrack( edf_t & edf , param_t & param )
 {
-  edf.add_continuous_time_track();
+  edf.add_time_track();
 }
 
 // RESTRUCTURE : flush masked records
@@ -2920,12 +3072,13 @@ void proc_restructure( edf_t & edf , param_t & param )
 
 void proc_record_dump( edf_t & edf , param_t & param )
 {
-  edf.add_continuous_time_track();  
+  edf.add_time_track();  
   edf.record_dumper( param );
 }
 
 
 // SEGMENTS : show all contiguous segments
+// (and optionally, add annotations to this effect)
 
 void proc_dump_segs( edf_t & edf , param_t & param )
 {
@@ -2955,7 +3108,8 @@ void proc_sleep_stage( edf_t & edf , param_t & param , bool verbose )
   std::string rem    = param.has( "R" )  ? param.value("R")  : "" ;
   std::string lights = param.has( "L" )  ? param.value("L")  : "" ; 
   std::string misc   = param.has( "?" )  ? param.value("?")  : "" ; 
-
+  bool force_remake  = param.has( "force" );
+  
   std::string eannot = param.has( "eannot" ) ? param.value( "eannot" ) : "" ;
   if ( eannot != "" && verbose ) Helper::halt( "cannot use eannot with HYPNO" );
 
@@ -2971,7 +3125,7 @@ void proc_sleep_stage( edf_t & edf , param_t & param , bool verbose )
     }
   else
     {      
-      edf.timeline.annotations.make_sleep_stage( edf.timeline, wake , nrem1 , nrem2 , nrem3 , nrem4 , rem , lights, misc );
+      edf.timeline.annotations.make_sleep_stage( edf.timeline, force_remake, wake , nrem1 , nrem2 , nrem3 , nrem4 , rem , lights, misc );
       bool okay = edf.timeline.hypnogram.construct( &edf.timeline , param , verbose ); 
       if ( ! okay ) return; // i.e. if no valid annotations found
     }
@@ -3387,6 +3541,66 @@ void proc_enforce_signals( edf_t & edf , param_t & param )
 void proc_rename( edf_t & edf , param_t & param )
 {
 
+  // either from a file, or the command line
+  if ( param.has( "file" ) )
+    {
+      if ( param.has( "new" ) ) 
+	Helper::halt( "cannot specify both file and sig/new" );
+      
+      std::vector<std::string> old_signals, new_signals;
+      std::set<std::string> newset;
+
+      const std::string fname = Helper::expand( param.value( "file" ) );
+      if ( ! Helper::fileExists( fname ) )
+	Helper::halt( "could not open " + fname );
+      
+      std::ifstream I1( fname.c_str() , std::ios::in );
+      while ( ! I1.eof() )
+	{
+	  std::string line;
+	  Helper::safe_getline( I1 , line);
+	  if ( I1.eof() || line == "" ) continue;	  
+	  std::vector<std::string> tok2 = Helper::parse( line , "\t" );
+	  if ( tok2.size() != 2 ) 
+	    Helper::halt( "expecting two tab-delimited values: " + line );
+
+	  const std::string s1 = tok2[0];
+	  const std::string s2 = tok2[1];
+	  	  
+	  const bool old_exists = edf.header.has_signal( s1 );
+	  const bool new_exists = edf.header.has_signal( s2 );
+	  
+	  // new mappings must be unique
+	  if ( new_exists )
+	    Helper::halt( "'new' signal labels cannot already exist in the EDF" );
+	  
+	  // just ignore if original channel does not exist
+	  if ( old_exists )
+	    {
+	      old_signals.push_back( s1 );
+	      new_signals.push_back( s2 );
+	      newset.insert( s2 );
+	    }
+	  
+	  // next pair
+	}
+
+      if ( newset.size() != new_signals.size() )
+	Helper::halt( "cannot have duplicate labels in new" );
+      
+      for (int s=0; s<old_signals.size(); s++)
+	{
+	  logger << "  renaming [" << old_signals[s] << "] as [" << new_signals[s]  << "]\n";
+	  edf.header.rename_channel( old_signals[s] , new_signals[s] );
+	}
+      
+      return;
+    }
+  
+  //
+  // Otherwise, take input from command line
+  //
+
   signal_list_t signals = edf.header.signal_list( param.requires( "sig" ) );
   std::vector<std::string> new_signals = param.strvector( "new" );
   
@@ -3591,6 +3805,32 @@ void proc_slice( edf_t & edf , param_t & param , int extract )
   logger << " read " << intervals.size() << " from " << filename << "\n";
   
   edf.slicer( intervals , param , extract );
+  
+}
+
+
+// REMAP
+
+void proc_remap_annots( edf_t & edf , param_t & param )
+{
+  // as if having originally 'remap' command, but apply these
+  // after the fact, i.e. to already loaded/created annots
+
+  if ( ! param.has( "file" ) ) Helper::halt( "requires file argument" );
+  
+  const std::vector<std::string> files = param.strvector( "file" );
+  
+  int remap_field = 0;
+  if ( param.has( "remap-col" ) ) remap_field = 1;
+  else if ( param.has( "optional-remap-col" ) ) remap_field = 2;
+
+  // be default, allow spaces (i.e. for moonlight)
+  const bool remap_spaces = param.has( "allow-spaces" ) ? param.yesno( "allow-spaces" ) : false;
+  const bool remap_verbose = param.has( "verbose" );
+  
+  int mapped = edf.timeline.annotations.remap( files , remap_field , remap_spaces , remap_verbose );
+
+  logger << "  remapped " << mapped << " annotations\n";
   
 }
 
@@ -3892,6 +4132,30 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
       return;
     }
 
+  // do not read IDs in
+  if ( Helper::iequals( tok0 , "anon" ) )
+    {
+      globals::anon = Helper::yesno( tok1 );
+      return;
+    }
+
+  // force start time/dates
+  if ( Helper::iequals( tok0 , "starttime" ) )
+    {
+      globals::force_starttime = tok1;
+      if ( globals::force_starttime.size() > 8 )
+	Helper::halt( "starttime cannot be over 8 characters" );
+      return;
+    }
+  
+  if ( Helper::iequals( tok0 , "startdate" ) )
+    {
+      globals::force_startdate = tok1;
+      if ( globals::force_startdate.size() > 8 )
+	Helper::halt( "startdate cannot be over 8 characters" );      
+      return;
+    }
+  
   // specify indiv-wildcard (other than ^)
   // which is needed if file ID actually contains ^
   if ( Helper::iequals( tok0 , "wildcard" ) )
@@ -3980,7 +4244,26 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
       globals::set_0dur_as_ellipsis =  Helper::yesno( tok1 );;
       return;
     }
-  
+
+  // treatment of gaps going from EDF+D to EDF in annots
+  if ( Helper::iequals( tok0 , "annot-segment" ) )
+    {
+      globals::annot_disc_segment = tok1[0];
+      return;
+    }
+
+  if ( Helper::iequals( tok0 , "annot-gap" ) )
+    {
+      globals::annot_disc_gap = tok1[0];
+      return;
+    }
+
+  if ( Helper::iequals( tok0 , "annot-span-gaps" ) )
+    {
+      globals::annot_disc_drop_spanning = ! Helper::yesno( tok1 );
+      return;
+    }
+
   // split class/annot remappings (ABC/DEF|XYZ)
   if ( Helper::iequals( tok0 , "class-instance-delimiter" ) )
     {
@@ -4010,13 +4293,26 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
       nsrr_t::unmapped = Helper::yesno( tok1 );
       return;
     }
-
   
       
   // sleep stage prefix
   if (  Helper::iequals( tok0 , "ss-prefix" ) )
     {
       globals::sleep_stage_prefix = tok1; 
+      return;
+    }
+
+  // POPS stages: pN1, pN2, ... 
+  if ( Helper::iequals( tok0 , "ss-pops" ) )
+    {
+      globals::sleep_stage_prefix = "p";
+      return;
+    }
+
+  // SOAP stages: sN1, sN2, ... 
+  if ( Helper::iequals( tok0 , "ss-soap" ) )
+    {
+      globals::sleep_stage_prefix = "s";
       return;
     }
   
@@ -4096,22 +4392,40 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
   if ( Helper::iequals( tok0 , "compressed" ) )
     {
       bool yesno = Helper::yesno( tok1 );      
-      globals::cmddefs.all_compressed( yesno );
-      globals::cmddefs.none_compressed( !yesno );
+      globals::cmddefs().all_compressed( yesno );
+      globals::cmddefs().none_compressed( !yesno );
       return;
     }
 
-  // NSRR remapping
+
+  //          default
+  // stages   Y
+  // others   N
+  // i.e. order of annot-remap=F and nsrr-remap=T will matter
+  
+  // annot-remap: if F, then wipe all (stages + any added NSRR terms)
+  if ( Helper::iequals( tok0 , "annot-remap" ) )
+    {
+      
+      //nsrr_t::do_remap = Helper::yesno( tok1 ) ;
+
+      // clear ALL (stages + others) pre-populated NSRR remapping      
+      if ( !  Helper::yesno( tok1 ) )  
+	nsrr_t::clear();
+      
+      return;
+    }
+
+  // nsrr-remap: if T, add in extra terms (off by default)  
   if ( Helper::iequals( tok0 , "nsrr-remap" ) )
     {
-      // clear pre-populated NSRR remapping
-      if ( ! Helper::yesno( tok1 ) )
-	nsrr_t::clear();
+      if ( Helper::yesno( tok1 ) )
+	nsrr_t::init_nsrr_mappings();
       return;
     }
   
   // generic annotation re-labelling, same format as 'alias'
-  else if ( Helper::iequals( tok0 , "remap" ) )
+  if ( Helper::iequals( tok0 , "remap" ) )
     {
       nsrr_t::annot_remapping( globals::sanitize_everything ? Helper::sanitize( tok1 ) : tok1 );
       return;
@@ -4120,41 +4434,40 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
   // for EDF-annots only, set these to be a class rather than an annotation
   // (and apply any remappings)
   // if annot-whitelist=T then we *only* add EDF Annots if they are named here 
-  else if ( Helper::iequals( tok0 , "edf-annot-class" ) )
+  if ( Helper::iequals( tok0 , "edf-annot-class" ) )
     {
       nsrr_t::edf_annot_class( globals::sanitize_everything ? Helper::sanitize( tok1 ) : tok1 );
       return;
     }
-
+  
+  if (  Helper::iequals( tok0 , "edf-annot-class-all" ) )
+    {
+      // equals 'edf-annot-class=*'
+      if ( Helper::yesno( tok1 ) )
+	nsrr_t::edf_annot_class( "*" ); // set all to be read as a class, e.g. for Moonlight
+      return;
+    }
+  
+  
   
   // fix delimiter to tab only for .annot
   // default T --> tab-only=F is option to allow spaces  
-  else if ( Helper::iequals( tok0 , "tab-only" ) )
+  if ( Helper::iequals( tok0 , "tab-only" ) )
     {
       globals::allow_space_delim = ! Helper::yesno( tok1 );
       return;
     }
 
-  // default annot folder
-  // else if ( Helper::iequals( tok0 , "annot-folder" ) ||
-  // 	    Helper::iequals( tok0 , "annots-folder" ) ) 
-  //   {
-  //     if ( tok1[ tok1.size() - 1 ] != globals::folder_delimiter )
-  // 	globals::annot_folder = tok1 + globals::folder_delimiter ;
-  //     else
-  // 	globals::annot_folder = tok1;		      
-  //     return;
-  //   }
 
   // if annot INST ID black, add hh:mm:ss
-  else if ( Helper::iequals( tok0 , "inst-hms" ) )
+  if ( Helper::iequals( tok0 , "inst-hms" ) )
     {
       globals::set_annot_inst2hms = Helper::yesno( tok1 );
       return;
     }
 
   // set INST ID to hh:mm:ss, whether it is blank or not
-  else if ( Helper::iequals( tok0 , "force-inst-hms" ) )
+  if ( Helper::iequals( tok0 , "force-inst-hms" ) )
     {
       globals::set_annot_inst2hms_force = Helper::yesno( tok1 );
       return;
@@ -4162,7 +4475,7 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
 
   // not enforce epoch check for .eannot
   // default = 5 ... (arbitrary, but allow the occassional off-by-one issue)
-  else if ( Helper::iequals( tok0 , "epoch-check" ) )
+  if ( Helper::iequals( tok0 , "epoch-check" ) )
     {
       if ( ! Helper::str2int( tok1 , &globals::enforce_epoch_check ) )
         Helper::halt( "epoch-check requires integer value, e.g. epoch-check=10" );
@@ -4171,7 +4484,7 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
     }
 
   // set default epoch length
-  else if ( Helper::iequals( tok0 , "epoch-len" ) )
+  if ( Helper::iequals( tok0 , "epoch-len" ) )
     {
       if ( ! Helper::str2int( tok1 , &globals::default_epoch_len ) )
 	Helper::halt( "epoch-len requires integer value, e.g. epoch-len=10" );
@@ -4181,25 +4494,18 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
 
   // additional annot files to add from the command line
   // i.e. so we don't have to edit the sample-list
-  else if ( Helper::iequals( tok0 , "annot-file" ) ||
-	    Helper::iequals( tok0 , "annot-files" ) ||
-	    Helper::iequals( tok0 , "annots-file" ) ||
-	    Helper::iequals( tok0 , "annots-files" ) )
+  if ( Helper::iequals( tok0 , "annot-file" ) ||
+       Helper::iequals( tok0 , "annot-files" ) ||
+       Helper::iequals( tok0 , "annots-file" ) ||
+       Helper::iequals( tok0 , "annots-files" ) )
     {
       globals::annot_files = Helper::parse( tok1 , "," );
-      return;
-    }
-
-  // do not load sample-list annotations
-  if ( Helper::iequals( tok0 , "skip-sl-annots" ) )
-    {
-      globals::skip_sl_annots = Helper::yesno( tok1 );
       return;
     }
   
 
   // specified annots (only load these)
-  else if ( Helper::iequals( tok0 , "annots" ) || Helper::iequals( tok0 , "annot" ) ) 
+  if ( Helper::iequals( tok0 , "annots" ) || Helper::iequals( tok0 , "annot" ) ) 
     {
       param_t dummy;     
       dummy.add( "dummy" , globals::sanitize_everything ? Helper::sanitize( tok1 ) : tok1 );
@@ -4226,7 +4532,15 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
   // signal alias?
   if ( Helper::iequals( tok0 , "alias" ) )
     {
-      cmd_t::signal_alias( globals::sanitize_everything? Helper::sanitize( tok1 ) : tok1 );
+
+      const std::string str = globals::sanitize_everything ?
+	(  globals::replace_channel_spaces
+	   ? Helper::trim( Helper::sanitize( tok1 ) , '_' ) 
+	   : Helper::trim( Helper::sanitize( tok1 , ' ' ) , '_' ) 
+	   )
+	: tok1 ; 
+      
+      cmd_t::signal_alias( str );
       return;
     }
   
@@ -4252,17 +4566,19 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
       return;
     }
 
-  // do not read ANNOT annotations
-  if ( Helper::iequals( tok0 , "skip-annots" ) )
+  // do not load sample-list annotations
+  if ( Helper::iequals( tok0 , "skip-sl-annots" ) )
     {
-      globals::skip_nonedf_annots = Helper::yesno( tok1 );
+      globals::skip_sl_annots = Helper::yesno( tok1 );
       return;
     }
-
-  // do not read EDF or ANNOT annotations
-  if ( Helper::iequals( tok0 , "skip-all-annots" ) )
+  
+  // do not read ANY annotations
+  if ( Helper::iequals( tok0 , "skip-annots" ) ||
+       Helper::iequals( tok0 , "skip-all-annots" ) )
     {
-      globals::skip_edf_annots = globals::skip_nonedf_annots = Helper::yesno( tok1 );
+      // nb - internally skip_edf_annots and skip_sl_annots are redundant I believe, but can keep as is 
+      globals::skip_edf_annots = globals::skip_sl_annots = globals::skip_nonedf_annots = Helper::yesno( tok1 );
       return;
     }
   	
@@ -4279,6 +4595,7 @@ void cmd_t::parse_special( const std::string & tok0 , const std::string & tok1 )
       globals::txt_table_prepend = tok1;
       return;
     }
+
   if ( Helper::iequals( tok0 , "tt-append" ) ||  Helper::iequals( tok0 , "tt-suffix" ) )
     {
       globals::txt_table_append = tok1;

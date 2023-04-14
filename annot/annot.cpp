@@ -603,9 +603,9 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 	  
 	  x = Helper::unquote( x );
 	  
-	  // sanitize?
-	  if ( globals::sanitize_everything )
-	    x = Helper::sanitize( x );
+	  // sanitize? [ done in remap now ] 
+	  //	  if ( globals::sanitize_everything )
+	  //  x = Helper::sanitize( x );
 	  
 	  // remap? (and if so, track)
 	  std::string y = nsrr_t::remap( x ) ;
@@ -675,7 +675,9 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
   const bool align_annots = globals::annot_alignment.size() > 0 ;
     
   // check EDF starttime, which might be needed
+  //  -- but add EDF start date here too, to allow dhms printing
   
+  clocktime_t startdatetime( parent_edf.header.startdate, parent_edf.header.starttime );
   clocktime_t starttime( parent_edf.header.starttime );
     
   // read header then data
@@ -733,9 +735,13 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 
 	  std::string orig_name = Helper::unquote( Helper::trim( tok[0] ) ) ;
 	  
-	  // want to keep '/' symbol here though...
-	  if ( globals::sanitize_everything )
-	    orig_name = Helper::sanitize( orig_name , globals::class_inst_delimiter );
+	  // by default, '.' is the class.inst delimiter and this is
+	  // not sanitized;  so we can skip this here, as remap() handles
+	  // sanitization (but respects keeping spaces, if requested)
+	  // so, comment out this step below
+	  // want to keep '.' symbol here though... 
+	  // if ( globals::sanitize_everything )
+	  //   orig_name = Helper::sanitize( orig_name , globals::class_inst_delimiter );
 	  
 	  std::string name = nsrr_t::remap( orig_name );
 	  
@@ -917,19 +923,24 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 	  // Sanitize class name, but keep '/' and '.' symbol 
 	  //
 	  
-	  std::string aname = globals::sanitize_everything
-	    ? Helper::sanitize( Helper::unquote( tok[0] ) , globals::class_inst_delimiter )
-	    : Helper::unquote( tok[0] );
-	  
+	  // std::string aname = globals::sanitize_everything
+	  //   ? Helper::sanitize( Helper::unquote( tok[0] ) , globals::class_inst_delimiter )
+	  //   : Helper::unquote( tok[0] );
 
+	  std::string aname = Helper::unquote( tok[0] );
+	  
 	  //
-	  // Remap term?
+	  // Remap (and sanitize) term?
 	  //
+	  
+	  std::string tname = nsrr_t::remap( aname );
+	  
+	  if ( tname == "" ) continue;
+	  
+	  if ( tname != aname )
+	    parent_edf.timeline.annotations.aliasing[ tname ] = aname;
 
-	  
-	  aname = nsrr_t::remap( aname );
-	  
-	  if ( aname == "" ) continue;
+	  aname = tname;
 	  
 
 	  //
@@ -1068,7 +1079,7 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 		  tok[5] = ".";
 		  tok[4] = tok[3];
 		  tok[3] = tok[2];
-		  tok[2] = ".";
+		  tok[2] = ".";		  
 		}
 	      else if (  tok.size() == 3 )
 		{
@@ -1131,11 +1142,13 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 	  bool readon = false;
 	  
 	  std::string ch; 
-	  
+
 	  interval_t interval = get_interval( line , tok ,
 					      &ch , 
 					      &readon , 
-					      parent_edf , a , starttime , f ,
+					      parent_edf , a ,
+					      starttime , startdatetime, 
+					      f ,
 					      align_annots );
 	  
 	  //
@@ -1146,8 +1159,10 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 	  //
 	  
 	  if ( interval.start == 1 && interval.stop == 0 ) 
-	    {	      
+	    {
+	      //logger << "  *** warning, skipping annot\n";
 	      continue;
+	      
 	    }
 	  
 	  	  
@@ -1174,10 +1189,38 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 	      else
 		{
 		  std::vector<std::string> ntok = Helper::parse( buffer , globals::allow_space_delim ? " \t" : "\t" );
-		  
+
 		  if ( ntok.size() == 0 ) 
 		    Helper::halt( "invalid line following '...' end timepoint" );
 
+		  // allow diff formats
+		  if ( ntok.size() != 6 ) 
+		    {
+		      if ( ntok.size() == 4 ) 
+			{
+			  ntok.resize( 6 );
+			  ntok[5] = ".";
+			  ntok[4] = ntok[3];
+			  ntok[3] = ntok[2];
+			  ntok[2] = ".";			  			  
+			}
+		      else if (  ntok.size() == 3 )
+			{
+			  ntok.resize( 6 );
+			  ntok[5] = ".";
+			  ntok[4] = ntok[2];
+			  ntok[3] = ntok[1];
+			  ntok[2] = ".";
+			  ntok[1] = ".";
+			}
+		      else
+			Helper::halt ( "expecting 6/4/3 columns, but found " 
+				       + Helper::int2str( (int) ntok.size() ) 
+				       + "\n  (hint: use the 'tab-only' option to ignore space delimiters)\n"
+				       + "line [ " + buffer + "]" );
+		      
+		    }
+		  
 		  std::string nch;
 		  bool dummy;
 		  
@@ -1185,7 +1228,9 @@ bool annot_t::load( const std::string & f , edf_t & parent_edf )
 		  interval_t ninterval = get_interval( line , ntok ,
 						       &nch, 
 						       &dummy, 
-						       parent_edf , NULL , starttime , f ,
+						       parent_edf , NULL ,
+						       starttime , startdatetime, 
+						       f ,
 						       align_annots );
 		  
 		  
@@ -1398,12 +1443,15 @@ interval_t annot_t::get_interval( const std::string & line ,
 				  bool * readon , 
 				  const edf_t & parent_edf , 
 				  annot_t * a ,
-				  const clocktime_t & starttime , 
+				  const clocktime_t & starttime ,
+				  const clocktime_t & startdatetime , 
 				  const std::string & f ,
 				  const bool align_annots 
 				  )
 {
 
+  // std::cout << "[" << line << "]\n";
+  
   // 0 class
   // 1 instance
   // 2 channel
@@ -1551,8 +1599,9 @@ interval_t annot_t::get_interval( const std::string & line ,
 
       // assume this is either: 
       //    single numeric value (in seconds) which is an offset past the EDF start
-      // OR in clock-time, in hh:mm:ss (24-hour) format
-
+      // OR in clock-time, in hh:mm:ss (24-hour) format or dd-mm-yy-hh:mm:ss
+      // OR in elapsed clock-time in format 0+hh:mm:ss
+      
       // with either format, the second column can be a read-on  ('...')
       // with either format, the second column can be a duration (in secs) if second col starts +
       
@@ -1598,49 +1647,118 @@ interval_t annot_t::get_interval( const std::string & line ,
       
       double dbl_start = 0 , dbl_stop = 0;
       
-      // start time:
+      // start time
+      
       if ( is_hms1 )
 	{
+
 	  clocktime_t atime( start_str );
 
+	  // 0+hh:mm:ss format
 	  if ( is_elapsed_hhmmss_start )
 	    {
-	      dbl_start = atime.seconds(); 
+
+	      if ( atime.d != 0 )
+		Helper::halt( "elapsed clock-times cannot contain dates: format = 0+hh:mm:ss" );
+
+	      // i.e. seconds past 'midnight == start of EDF' 
+	      dbl_start = atime.seconds();
+	      
 	    }
 	  else
 	    {
-	      // 1: EDF start comes before ANNOT start
-	      // 2: annot start comes before EDF start --> need to ignore by 
-	      //    setting special flag interval_t(1,0) 
+
+	      // if dates are specified, check that annot does not start before the EDF start
+	      // otherwose, *assume* that it starts afterwards
+	      //  i.e. if start = 10pm,  then 9pm --> 23 hours later, assumed the next day
 	      
-	      int earlier = clocktime_t::earlier( starttime , atime );
+	      // if start is before EDF start, flag that ( special flag interval interval_t(1,0)   
+
+	      // day information specified?
 	      
-	      if ( earlier == 2 ) 
-		before_edf_start = true;
-	      else 
-		dbl_start = clocktime_t::difference_seconds( starttime , atime ) ;
-	      
+	      if ( startdatetime.d != 0 && atime.d != 0 ) 
+		{		  
+		  int earlier = clocktime_t::earlier( startdatetime , atime );		  
+		  if ( earlier == 2 )
+		    before_edf_start = true;
+		  else
+		    dbl_start = clocktime_t::ordered_difference_seconds( startdatetime , atime ) ;
+		}
+	      else if ( startdatetime.d == 0 && atime.d != 0 )
+		{
+		  // do not allow date info in annot if EDF start is null
+		  Helper::halt( "cannot specify annotations with date-times if the EDF start date is null (1.1.85)" );
+		}
+	      else
+		{
+		  
+		  // otherwise, no date information for the annotation, so
+		  //  a) ignore date of EDF start and
+		  //  b) assume that the time is the next to occur		   
+		  
+		  dbl_start = clocktime_t::ordered_difference_seconds( starttime , atime ) ;
+		  
+		}
+	      	      
 	    }
 
 	}
       else 
 	{
-	  // if here, we are assuming this is not a hh:mm:ss format time, 
+	  // if here, we are assuming this is not a (dd-mm-yy-)hh:mm:ss format time, 
 	  // so assume this is seconds 
+
 	  if ( ! Helper::str2dbl( start_str , &dbl_start ) )
 	    Helper::halt( "invalid interval (start) : " + line );
-
+	  
 	}
 
+      
       // stop time:
       if ( is_hms2 )
 	{
+	  
 	  clocktime_t btime( stop_str );
-
+	  
 	  if ( is_elapsed_hhmmss_stop )
-	    dbl_stop = btime.seconds(); // was ealpsed [hh:mm:ss] 
+	    {
+	      // was elapsed 0+hh:mm:ss
+	      
+	      if ( btime.d != 0 )
+                Helper::halt( "elapsed clock-times cannot contain dates: format = 0+hh:mm:ss" );
+	      
+	      dbl_stop = btime.seconds(); 
+	    }
 	  else
-	    dbl_stop = clocktime_t::difference_seconds( starttime , btime ) ;  // was clocktime
+	    {
+	      // date-time available for stop and EDF start?
+
+              if ( startdatetime.d != 0 && btime.d != 0 )
+                {
+		  
+                  int earlier = clocktime_t::earlier( startdatetime , btime );
+		  
+		  if ( earlier == 2 )
+	            before_edf_start = true;
+                  else
+                    dbl_stop = clocktime_t::ordered_difference_seconds( startdatetime , btime ) ;		  
+		}
+	      else if ( startdatetime.d == 0 && btime.d != 0 )
+		{
+		  Helper::halt( "cannot specify annotations with date-times if the EDF start date is null (1.1.85)" );
+		}
+	      else
+		{
+		  // otherwise, no date information for the annotation, so
+		  //  a) ignore date of EDF start and
+		  //  b) assume that the time is the next to occur		   
+		  
+		  dbl_stop = clocktime_t::ordered_difference_seconds( starttime , btime ) ;
+		  
+		}
+	      
+	    }
+	  
 	}
       else if ( col2dur ) // expecting ""
 	{
@@ -1657,11 +1775,17 @@ interval_t annot_t::get_interval( const std::string & line ,
 	}
       
       if ( dbl_start < 0 )
-	Helper::halt( f + " contains row(s) with negative time points" ) ;
-      
-      if ( ( !*readon ) && dbl_stop < 0 )
-	Helper::halt( f + " contains row(s) with negative time points" ) ;
+	{
+	  //std::cout << " S1 " << dbl_start << "\n";
+	  Helper::halt( f + " contains row(s) with negative time points" ) ;
+	}
 
+      if ( ( !*readon ) && dbl_stop < 0 )
+	{
+	  //std::cout << " S2 " << dbl_start << "\n";
+	  Helper::halt( f + " contains row(s) with negative time points" ) ;
+	}
+      
       // annot(epoch)/record alignment (to the leftmost second)
       // i.e. to handle staging annots that start at a fractional second onset
 
@@ -1685,8 +1809,9 @@ interval_t annot_t::get_interval( const std::string & line ,
 
       if ( ! *readon )
 	interval.stop  = Helper::sec2tp( dbl_stop );
-      
+
     }
+
   
   
   if ( ! *readon )
@@ -2636,6 +2761,7 @@ bool globals::is_stage_annotation( const std::string & s )
 
 
 bool annotation_set_t::make_sleep_stage( const timeline_t & tl ,
+					 const bool force_remake , 
 					 const std::string & a_wake , 
 					 const std::string & a_n1 , 
 					 const std::string & a_n2 , 
@@ -2646,19 +2772,22 @@ bool annotation_set_t::make_sleep_stage( const timeline_t & tl ,
 					 const std::string & a_other )
 {
 
+
+  //
+  // force a remake?
+  //
+  
+  if ( force_remake )
+    clear( "SleepStage" );
+      
   //
   // already made?
   //
   
-  if ( find( "SleepStage" ) != NULL ) return false; 
-
+  if ( find( "SleepStage" ) != NULL )
+    return false; 
   
-  //
-  // Is a prefix specified? 
-  //
-
-  bool has_prefix = globals::sleep_stage_prefix != "" ;
-
+   
   //
   // Use default annotation labels, if not otherwise specified
   // 
@@ -2668,8 +2797,11 @@ bool annotation_set_t::make_sleep_stage( const timeline_t & tl ,
   std::map<std::string,annot_t*>::const_iterator ii = annots.begin();
   while ( ii != annots.end() )
     {
-
-      const std::string & s = has_prefix ? globals::sleep_stage_prefix + "_" + ii->first : ii->first;
+      
+      const std::string & s = ii->first;
+      
+      // this function takes care of any prefix specified via ss-prefix
+      // i.e.   if prefix is 'p' than 'pN1' will match to 'N1' etc
       
       sleep_stage_t ss = globals::stage( s );
       
@@ -2704,7 +2836,6 @@ bool annotation_set_t::make_sleep_stage( const timeline_t & tl ,
   if ( v_rem.size() == 0 ) v_rem.push_back( drem );
   if ( v_light.size() == 0 ) v_light.push_back( dlight );
   if ( v_other.size() == 0 ) v_other.push_back( dother );
-  
 
   //
   // find annotations, allowing a comma-delimited list
@@ -2720,7 +2851,7 @@ bool annotation_set_t::make_sleep_stage( const timeline_t & tl ,
   
   for (int a=0;a<v_n2.size();a++)
     n2s.push_back( find( v_n2[a] ) );
-
+  
   for (int a=0;a<v_n3.size();a++)
     n3s.push_back( find( v_n3[a] ) );
 
@@ -2943,9 +3074,13 @@ bool annotation_set_t::make_sleep_stage( const timeline_t & tl ,
   //
   // Create the 'SleepStage' unified annotation (used by HYPNO, STAGE, and POPS)
   //
+
+  // ensure cleared if already exists; if it doesn't this command won't
+  // do anything, so okay
+  clear( "SleepStage" );
   
   annot_t * ss = add( "SleepStage" );
-
+  
   ss->description = "SleepStage";
   
   for ( int i=0; i<vec_stages.size(); i++ )
@@ -3082,7 +3217,8 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
   // use hh:mm:ss, if possible, instead of elapsed seconds (for .annot only)
   //
 
-  bool hms = param.has( "hms" );
+  bool hms = param.has( "hms" ) || param.has( "dhms" );
+  const bool dhms = param.has( "dhms" );
 
   //
   // If from internal EDF+D, write w/ time-stamps for standard EDF
@@ -3092,27 +3228,59 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
   const bool collapse_disc = param.has( "collapse" );
   
   //
+  // Min duration (e.g. to ensure we have 30 sec epochs)
+  //
+
+  const bool has_min_dur = param.has( "min-dur" ) && param.requires_dbl( "min-dur" ) > 0 ;
+  
+  const double min_dur = has_min_dur ?  param.requires_dbl("min-dur" )  : 0 ;
+    
+    
+  //
   // for complete XML compatibility
   //
 
-  const bool add_specials = ! param.has( "no-specials" );
+  // no outputs other than data rows (no class line)  
+  const bool minimal = param.has( "minimal" ) || param.has( "min" ) ;
   
-  clocktime_t starttime( edf.header.starttime );
-
+  const bool add_specials = param.has( "specials" );
+  
+  // in .annot mode only, skip # headers
+  const bool add_headers = param.has( "headers" );
+  
+  // ensure date is here too (to allow 'dhms' mode printing)
+  clocktime_t starttime( edf.header.startdate , edf.header.starttime );
+  
   if ( hms && ! starttime.valid ) 
     {
       logger << " ** could not find valid start-time in EDF header **\n";
       hms = false;
     }
 
+  
+  
+
+  
   //
   // Any offsets specified to annotations for output? (i.e. via ALIGN)
   //
 
+  // nb. this could have been set by the ALIGN command -- although, we
+  //    are taking that as redundant / too complicated now... so
+  //    here also allow direct specificaiton (in secs) for WRITE-ANNOT
+  //    but in that case it is interpeted here as +ve (i.e. to add, not subjtract)
+  
+  if ( param.has( "offset" ) )
+    {
+      double s1 = param.requires_dbl( "offset" );      
+      annot_offset = s1 * globals::tp_1sec;
+      annot_offset_dir = +1;
+    }
+  
   if ( annot_offset )
-    logger << "  applying a offset of -"
+    logger << "  applying a offset of " << ( annot_offset_dir == 1 ? "+" : "-" ) 
 	   << annot_offset * globals::tp_duration
-	   << " to all annotations when writing out\n";
+	   << " seconds to all annotations when writing out\n";
 
   //
   // either for all annots, or just a subset
@@ -3251,23 +3419,42 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
 	  const annot_t * annot = instance_idx.parent;
 
 	  annot_map_t::const_iterator ii = annot->interval_events.find( instance_idx );
-          if ( ii == annot->interval_events.end() )  continue;
+          if ( ii == annot->interval_events.end() ) {++ee; continue; }
 	  instance_t * inst = ii->second;
 	  
+	  // skip if too short?
+	  
+	  interval_t interval = instance_idx.interval;
+
+	  if ( has_min_dur )
+	    {	      
+	      const bool too_short = interval.duration_sec() < min_dur ; 	      
+	      if ( too_short ) { ++ee; continue;}
+	    }
+
+	  // output
 	  
 	  O1 << "<Instance class=\"" << annot->name << "\">\n";
 	  
 	  if ( instance_idx.id != "." && instance_idx.id != "" ) 
 	    O1 << " <Name>" << instance_idx.id << "</Name>\n";
-
+	  
 	  // adjuts by offset, if needed (ALIGN)
-	  interval_t interval = instance_idx.interval;
+	  
 	  if ( annot_offset )
 	    {
-	      if ( interval.start < annot_offset ) interval.start = 0;
-	      else interval.start -= annot_offset;
-	      if ( interval.stop < annot_offset ) interval.stop = 0;
-	      else interval.stop -= annot_offset;
+	      if ( annot_offset_dir == +1 )
+		{
+                  interval.start += annot_offset;
+                  interval.stop += annot_offset;
+		}
+	      else // from ALIGN
+		{
+		  if ( interval.start < annot_offset ) interval.start = 0;
+		  else interval.start -= annot_offset;
+		  if ( interval.stop < annot_offset ) interval.stop = 0;
+		  else interval.stop -= annot_offset;
+		}
 	    }
 	  
 	  O1 << " <Start>" << interval.start_sec() << "</Start>\n"
@@ -3355,29 +3542,35 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
 	  if ( annot->interval_events.size() == 0 ) continue;
 	  
 	  bool has_vars = annot->types.size() > 0 ;
-
-	  // nb. ensure class name is quoted if contains `|` delimiter here 
-	  O1 << "# " << Helper::quote_if( annot->name, '|' ) ; 
 	  
-	  if ( annot->description != "" )
-	    O1 << " | " << annot->description;
-	  else if ( has_vars ) // need a dummy description here 
-	    O1 << " | " << annot->description ;
 	  
-	  if ( has_vars ) 
-	    O1 << " |";
-	  
-	  std::map<std::string, globals::atype_t>::const_iterator aa = annot->types.begin();
-	  while ( aa != annot->types.end() )
+	  if ( add_headers )
 	    {
-	      O1 << " " << aa->first 
-		 << "[" 
-		 << globals::type_name[ aa->second ] 
-		 << "]";	      
-	      ++aa;
-	    }
 	  
-	  O1 << "\n";
+	      // nb. ensure class name is quoted if contains `|` delimiter here 
+	      O1 << "# " << Helper::quote_if( annot->name, '|' ) ; 
+	      
+	      if ( annot->description != "" )
+		O1 << " | " << Helper::quote_if( annot->description, '|' );
+	      else if ( has_vars ) // need a dummy description here 
+		O1 << " | " << Helper::quote_if( annot->description, '|' );
+	      
+	      if ( has_vars ) 
+		O1 << " |";
+	      
+	      std::map<std::string, globals::atype_t>::const_iterator aa = annot->types.begin();
+	      while ( aa != annot->types.end() )
+		{
+		  O1 << " " << aa->first 
+		     << "[" 
+		     << globals::type_name[ aa->second ] 
+		     << "]";	      
+		  ++aa;
+		}
+	      
+	      O1 << "\n";
+	      
+	    }
 
 
 	  //
@@ -3402,7 +3595,7 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
       // dummy markers first 
       //
 
-      if ( add_specials )
+      if ( add_specials && add_headers )
 	{
 	  if ( start_hms != "." ) 
 	    O1 << "# start_hms | EDF start time\n";
@@ -3418,13 +3611,14 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
       // (optional, but nice to have) header row for data 
       //
 
-      O1 << "class" << "\t"
-	 << "instance" << "\t"
-	 << "channel" << "\t"
-	 << "start" << "\t"
-	 << "stop" << "\t"
-	 << "meta" << "\n";
-
+      if ( ! minimal )
+	O1 << "class" << "\t"
+	   << "instance" << "\t"
+	   << "channel" << "\t"
+	   << "start" << "\t"
+	   << "stop" << "\t"
+	   << "meta" << "\n";
+      
       //
       // Now, the data rows
       //
@@ -3472,27 +3666,55 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
 	  if ( annot->name == "duration_hms" ) { ++ee; continue; } 
 	  if ( annot->name == "duration_sec" ) { ++ee; continue; } 
 	  if ( annot->name == "epoch_sec" ) { ++ee; continue; } 
+	  
+
+
+	  //
+	  // Get interval
+	  //
+
+	  interval_t interval = instance_idx.interval;
+	  
+	  // any duration reqs?
+
+	  if ( has_min_dur )
+	    {	      
+	      const bool too_short = interval.duration_sec() < min_dur ; 	      
+	      if ( too_short ) { ++ee; continue; } 
+	    }
+	  
 
 	  //
 	  // start/stop in seconds, with 4 d.p.
 	  //
 	  
 	  // any re-ALIGNment ? 
-	  interval_t interval = instance_idx.interval;
+
 
           if ( annot_offset )
             {
-	      if ( interval.start < annot_offset ) interval.start = 0;
-              else interval.start -= annot_offset;
-              if ( interval.stop < annot_offset ) interval.stop	= 0;
-              else interval.stop -= annot_offset;	      
-            }
-
+	      if ( annot_offset_dir == 1 )
+		{
+		  interval.start += annot_offset;
+		  interval.stop += annot_offset;
+		}
+	      else // from ALIGN
+		{
+		  if ( interval.start < annot_offset ) interval.start = 0;
+		  else interval.start -= annot_offset;
+		  if ( interval.stop < annot_offset ) interval.stop	= 0;
+		  else interval.stop -= annot_offset;	      
+		}
+	    }
+	  
 	  // collapse from EDF+D to elapsed time in standard EDF ?
 
 	  if ( collapse_disc && ! edf.header.continuous ) 
 	    {
+	      //	      std::cout << " pre  " << interval.start << " -- " << interval.stop << "\n";
 	      interval = edf.timeline.collapse( interval );
+	      //std::cout << " post " << interval.start << " -- " << interval.stop << "\n";
+	      
 	      // if the annotation doesn't completely fit in a region, skip it
 	      if ( interval.start == 1LLU && interval.stop == 0LLU )
 		{ ++ee; continue; }
@@ -3529,23 +3751,47 @@ void annotation_set_t::write( const std::string & filename , param_t & param , e
 	    {
 
 	      double tp1_sec =  interval.start / (double)globals::tp_1sec;
+	      // add down to 1/1000th of a second
+	      double tp1_extra = tp1_sec - (long)tp1_sec;
+	      // but if we be round up to 1.000 then we need to add +1 to tp1_sec
+	      if ( tp1_extra >= 0.9995 )
+		{
+		  ++tp1_sec;
+		  tp1_extra = 0;
+		}
+
+	      // and get clock time
 	      clocktime_t present1 = starttime;
 	      present1.advance_seconds( tp1_sec );
-	      // add down to 1/100th of a second
-	      double tp1_extra = tp1_sec - (long)tp1_sec;
-	   
+
+	      // stop time
 	      double tp2_sec =  interval.stop / (double)globals::tp_1sec;
+	      double tp2_extra = tp2_sec - (long)tp2_sec;
+	      if ( tp2_extra >= 0.9995 )
+		{
+		  ++tp2_sec;
+                  tp2_extra = 0;
+		}
 	      clocktime_t present2 = starttime;
 	      present2.advance_seconds( tp2_sec );
-	      double tp2_extra = tp2_sec - (long)tp2_sec;
+		  
+	      // std::cout << " tp = " << interval.as_string() << "\n";
+	      // std::cout << " times = " << interval.start_sec() << " " << interval.stop_sec() << "\t"
+	      // 		<< present1.as_string(':')  << " -- " << present2.as_string(':') << "\n";
 
+	      // std::cout << " fl = " << tp1_sec << " " << tp1_extra << " ---- " << tp2_sec << " " << tp2_extra << "\n";
+	      
+	      // add dd-mm-yy-hh:mm:ss
+	      
 	      // hh:mm:ss.ssss
 	      if ( globals::time_format_dp ) 
-		O1 << present1.as_string(':') << Helper::dbl2str_fixed( tp1_extra , globals::time_format_dp  ).substr(1) << "\t"
-		   << ( add_ellipsis ? "..." : present2.as_string(':') + Helper::dbl2str_fixed( tp2_extra , globals::time_format_dp  ).substr(1) ) ;
+		O1 << ( dhms ? present1.as_datetime_string(':') : present1.as_string(':') )
+		   << Helper::dbl2str_fixed( tp1_extra , globals::time_format_dp  ).substr(1)
+		   << "\t"
+		   << ( add_ellipsis ? "..." : ( dhms ? present2.as_datetime_string(':') : present2.as_string(':') ) + Helper::dbl2str_fixed( tp2_extra , globals::time_format_dp  ).substr(1) ) ;
 	      else // or truncate to hh:mm:ss
-		O1 << present1.as_string(':') << "\t"
-		   << ( add_ellipsis ? "..." : present2.as_string(':') ) ;
+		O1 << ( dhms ? present1.as_datetime_string(':') : present1.as_string(':') ) << "\t"
+		   << ( add_ellipsis ? "..." : ( dhms ? present2.as_datetime_string(':') : present2.as_string(':') ) ) ;
 	      
 	    }
 	  else // write as elapsed seconds
@@ -3782,9 +4028,17 @@ bool annot_t::loadxml_luna( const std::string & filename , edf_t * edf )
       
       dbl_stop = dbl_start + dbl_dur; 
 	      
-      if ( dbl_start < 0 ) Helper::halt( filename + " contains row(s) with negative time points" ) ;
-
-      if ( dbl_dur < 0 ) Helper::halt( filename + " contains row(s) with negative durations" );
+      if ( dbl_start < 0 )
+	{
+	  //std::cout << " S3 " << dbl_start << "\n";
+	  Helper::halt( filename + " contains row(s) with negative time points" ) ;
+	}
+      
+      if ( dbl_dur < 0 )
+	{
+	  //std::cout << " S4 " << dbl_dur << "\n";
+	  Helper::halt( filename + " contains row(s) with negative durations" );
+	}
       
       // convert to uint64_t time-point units
       
@@ -3922,6 +4176,8 @@ void annotation_set_t::clear()
   epoch_sec = 0 ; 
 
   annot_offset = 0LLU;
+
+  annot_offset_dir = -1;
 }
 
 
@@ -3983,15 +4239,21 @@ annot_t * annotation_set_t::from_EDF( edf_t & edf , edfz_t * edfz )
   // by default, this is edf_annot_t and the entries here are added as the instance ID
 
   // however, we can specify that certain EDF annotations are entered as a class
-  //  these will be remapped etc as above
+  //  these will be remapped etc as above;  if edf-annot-class-all=T, then /all/
+  //  EDF+ annotations are added at the class level
   
-  annot_t * a =  edf.timeline.annotations.add( globals::edf_annot_label );
-  
-  a->name = globals::edf_annot_label;
-  a->description = "EDF Annotations";
-  a->file = edf.filename;
-  a->type = globals::A_FLAG_T; 
+  annot_t * a =  NULL;
 
+  // only need edf_annot_t if edf-annot-class-all=F
+  if ( ! nsrr_t::all_edf_class )
+    {
+      a = edf.timeline.annotations.add( globals::edf_annot_label );
+      a->name = globals::edf_annot_label;
+      a->description = "EDF Annotations";
+      a->file = edf.filename;
+      a->type = globals::A_FLAG_T; 
+    }
+  
   // if we need to expand 0-duration stages
   uint64_t epoch_len = globals::tp_1sec *
     ( edf.timeline.epoch_len_tp_uint64_t() == 0 ?
@@ -4004,6 +4266,10 @@ annot_t * annotation_set_t::from_EDF( edf_t & edf , edfz_t * edfz )
   // but when reading a compressed EDF+, the annotations will
   // already be duplicated in the .idx, and so we can pull
   // directly from that, which is much quicker
+  //
+
+  //
+  // Parse EDFZ (from index)
   //
 
   if ( edfz != NULL )
@@ -4055,12 +4321,19 @@ annot_t * annotation_set_t::from_EDF( edf_t & edf , edfz_t * edfz )
 	      // get the annotation label
 	      std::string aname = Helper::trim( txt );
 	      
-	      // sanitize?
-	      if ( globals::sanitize_everything )
-		aname = Helper::sanitize( aname );
+	      // // sanitize?
+	      // if ( globals::sanitize_everything )
+	      // 	aname = Helper::sanitize( aname );
 	      
 	      // do any remapping
-	      aname = nsrr_t::remap( aname );
+	      const std::string tname = nsrr_t::remap( aname );
+
+	      // track aliasing?
+	      if ( tname != aname )
+		edf.timeline.annotations.aliasing[ tname ] = aname;	      
+
+	      aname = tname;
+	      
 	      
 	      // fix stage duration (if 0-dur point)?  (unless
 	      // adding ellipsis, i.e. here change points
@@ -4078,7 +4351,6 @@ annot_t * annotation_set_t::from_EDF( edf_t & edf , edfz_t * edfz )
 	      
 	      // is this a class?
 	      bool edf_class =  nsrr_t::as_edf_class( aname );
-	      // if not, do we ignore? : nsrr_t::only_add_named_EDF_annots 
 	      
 	      if ( aname != "" )
 		{			  
@@ -4161,13 +4433,20 @@ annot_t * annotation_set_t::from_EDF( edf_t & edf , edfz_t * edfz )
 		      // get the annotation label
 		      std::string aname = Helper::trim( te.name );
 
-		      // sanitize?
- 		      if ( globals::sanitize_everything )
-			aname = Helper::sanitize( aname );
+		      // sanitize? (done in remap() )
+		      //	      if ( globals::sanitize_everything )
+		      //   aname = Helper::sanitize( aname );
 		      
-		      // do any remapping
-		      aname = nsrr_t::remap( aname );
-			
+		      // do any remapping                                                                                                                         
+		      const std::string tname = nsrr_t::remap( aname );
+		      
+		      // track aliasing?                                                                                                                          
+		      if ( tname != aname )
+			edf.timeline.annotations.aliasing[ tname ] = aname;
+		      
+		      aname = tname;
+		      
+		     	      
 		      // fix stage duration (if 0-dur point)?  (unless
 		      // adding ellipsis, i.e. here change points
 		      // might not map to even epochs... 30, 90, 30,
@@ -4287,9 +4566,14 @@ uint64_t annotation_set_t::first_in_interval( const std::vector<std::string> & r
 }
 
 
-std::set<uint64_t> annotation_set_t::starts( const std::vector<std::string> & requested ) const
+std::set<uint64_t> annotation_set_t::starts( const std::vector<std::string> & requested , uint64_t dur ) const
 {
 
+  // get start points from these requested epochs;
+  // but add in extra start points for each 'dur' period within that annotation
+  // i.e. for epoch-alignment, this handles the case of annotations that are >1 multiples
+  // of the epoch size (e.g. 90s REM)  and adds in possible starts at 0, 30, 60 s
+  
   std::set<uint64_t> sts;
   
   for (int a=0; a < requested.size(); a++)
@@ -4301,10 +4585,27 @@ std::set<uint64_t> annotation_set_t::starts( const std::vector<std::string> & re
       annot_map_t::const_iterator ii = annot->interval_events.begin();
       while ( ii != annot->interval_events.end() )
 	{
-	  sts.insert( ii->first.interval.start );
+
+	  if ( dur == 0 )
+	    sts.insert( ii->first.interval.start );
+	  else
+	    {
+	      	  
+	      uint64_t pos = ii->first.interval.start ;
+	      uint64_t end = ii->first.interval.stop ;
+	      while ( 1 )
+		{
+		  if ( pos + dur <= end )
+		    {
+		      sts.insert( pos );
+		      pos += dur;
+		    }
+		  else break;
+		}
+	    }
 	  ++ii;
 	}
-    }  
+    }
   return sts;
 }
 
@@ -4320,3 +4621,197 @@ void annotation_set_t::extend( param_t & param )
 
   
 }
+
+
+int annotation_set_t::remap( const std::vector<std::string> & files , int remap_field , bool remap_spaces , bool verbose )
+{
+
+  if ( verbose )
+    {
+      logger << "  REMAP annotations:\n";
+      if ( remap_spaces )  logger << "   - allowing space-delimited & tab-delimited fields\n";
+      else logger << "   - only allowing tab-delimited fields\n";
+      
+      if      ( remap_field == 0 ) logger << "   - assuming no 'remap' column 1 fields\n";
+      else if ( remap_field == 1 ) logger << "   - assuming 'remap' column 1 fields present\n";
+      else if ( remap_field == 2 ) logger << "   - optionally allowing but not requiring 'remap' columns\n";
+    }	
+  
+  // clear all prior 'aliasing' info
+  aliasing.clear();
+  
+  int mapped = 0;
+
+  // remap_field
+  //   0  
+  //  primary  second|third                 [ remap_field == F ]
+
+  //   1 
+  //  remap     primary|second|third        [ remap_field == T ]
+
+  //   2 -- moonlight mode
+  //  could be either -- scan first field to determine
+  //  ignore 'remap' and also 'nsrr-remap'
+  
+
+  // if remap_spaces == T , then allow space-delimiters (i.e. assumes that
+  // annots w/ spaces are quoted)
+  
+  std::map<std::string,std::string> old2new;
+  
+  for (int fi=0; fi<files.size(); fi++)
+    {
+      const std::string fname = Helper::expand( files[fi] );
+      
+      if ( ! Helper::fileExists( fname ) )
+	Helper::halt( "could not find " + fname );
+
+      std::ifstream IN1( fname.c_str() , std::ios::in );
+      while ( ! IN1.eof() )
+	{
+	  std::string x;
+	  Helper::safe_getline( IN1 , x );
+          if ( IN1.eof() ) break;
+	  x = Helper::trim( x , ' ' , '\t' );
+	  
+	  if ( x == "" ) continue;
+	  if ( x[0] == '%' ) continue;
+	  
+	  std::vector<std::string> tok = remap_spaces ? Helper::quoted_parse( x, " \t" ) : Helper::parse( x , "\t" );
+
+	  // requires 'remap' field?
+	  if ( remap_field == 1 && ! Helper::iequals( tok[0] , "remap" ) )
+	    continue;
+
+	  // skip special term in NSRR annot files
+	  if ( Helper::iequals( tok[0] , "nsrr-remap" ) )
+	    continue;
+	  
+	  // allow
+	  //   remap    pri|sec|third    [ remap_field == T ] 
+	  //   pri      sec|third
+	  //   pri|sec|third
+
+	  bool has_remap = remap_field == 1 || ( remap_field == 2 && Helper::iequals( tok[0] , "remap" )  ) ;
+	  
+	  if ( tok.size() > 2 ) Helper::halt( "bad format: " + x );
+	  
+	  if ( has_remap && tok.size() != 2 ) Helper::halt( "bad format: " + x );
+	  
+	  std::string tok1 = has_remap ? tok[1] : ( tok.size() == 1 ? tok[0] : tok[0] + "|" + tok[1] ) ; 
+
+	  // swap out spaces?
+	  if ( globals::replace_annot_spaces )
+	    tok1 = Helper::search_replace( tok1 , ' ' , globals::space_replacement );
+
+	  // sanitize?
+	  if ( globals::sanitize_everything )
+	    {
+	      if ( globals::replace_annot_spaces )
+		tok1 = Helper::sanitize( tok1 );
+	      else // allow spaces in a sanitized version still, and keeps | and "
+		tok1 = Helper::sanitize( tok1 , ' ' );
+	    }
+	  
+	  std::vector<std::string> tok2 = Helper::quoted_parse( tok1 , "|" );
+	  
+	  if ( tok2.size() < 2 ) Helper::halt( "problem with line: " + x );
+
+	  // trims spaces and underscores
+	  std::string snew = Helper::trim( Helper::unquote( tok2[0] ) , '_' );
+	  for (int j=1; j<tok2.size(); j++)
+	    {
+	      std::string sorig = Helper::trim( Helper::unquote( tok2[j] ) , '_' );
+	      sorig = Helper::squash( Helper::squash( sorig , ' ' ) , '_' );
+	      old2new[ sorig ] = snew ;
+	      if ( verbose )
+		logger << "  adding mapping [" << sorig << "] --> [" << snew << "]\n";
+	    }
+	  
+	}
+    }
+
+  //
+  // requires a one-to-one mapping, i.e. cannot merge;  check this quickly here
+  //
+  
+  std::map<std::string,std::string> target2orig;
+  
+  std::map<std::string,std::string>::const_iterator aa = old2new.begin();
+  while ( aa != old2new.end() )
+    {
+      if ( aa->first == "start_hms" || aa->second == "start_hms" )
+	Helper::halt( "cannot remap to a special annotation term: start_hms" );
+
+      if ( aa->first == "duration_hms" || aa->second == "duration_hms" )
+	Helper::halt( "cannot remap to a special annotation term: duration_hms" );
+
+      if ( aa->first == "duration_sec" || aa->second == "duration_sec" )
+	Helper::halt( "cannot remap to a special annotation term: duration_sec" );
+      
+      if ( aa->first == "epoch_sec" || aa->second == "epoch_sec" )
+	Helper::halt( "cannot remap to a special annotation term: epoch_sec" );
+
+      if ( aa->first == "annot_offset" || aa->second == "annot_offset" )
+	Helper::halt( "cannot remap to a special annotation term: annot_offset" );
+
+      // does the original term actually exist?
+      if ( annots.find( aa->first ) != annots.end() )
+	{
+	  // check that the new term does *not* already exist
+	  if ( annots.find( aa->second ) != annots.end() )
+	    Helper::halt( "cannot map to an existing term: " + aa->first + " " + aa->second );
+
+	  // check that another original has not already pointed to the same new term, ( and exists in the data)
+	  if ( target2orig.find( aa->second ) != target2orig.end() )
+	    Helper::halt( "cannot map multiple existing terms to the same target: "
+			  + aa->first + " and " + target2orig[ aa->second ] + " --> " + aa->second );
+	  
+	  // otherwise, this will be okay to map
+	  target2orig[ aa->second ] = aa->first ; 
+	  
+	}	
+      
+      ++aa;
+    }
+
+
+  //
+  // Now do the actual remapping
+  //
+
+  // MAIN:: 
+  //  std::map<std::string,annot_t*> annots;
+  // update :  track alias swaps for this person
+  //    std::map<std::string,std::string> aliasing;
+
+  std::map<std::string,std::string>::const_iterator tt = target2orig.begin();
+  while ( tt != target2orig.end() )
+    {
+      // original : tt->second
+      // new      : tt->first
+      
+      logger << "  remapping " << tt->second << " to " << tt->first << "\n";
+      
+      // 1) copy index in pointer map
+      annots[ tt->first ] = annots[  tt->second ];
+
+      // 2) erase old version
+      annots.erase( annots.find(  tt->second ) );
+
+      // 3) update annot_t name
+      annot_t * a = annots[ tt->first ];
+      a->name = tt->first;
+
+      // 4) track in aliasing map [ new -> old ] 
+      //    i.e. so results will show in an ALIASES command
+      aliasing[ tt->first ] = tt->second ;
+      
+      ++mapped;
+      
+      ++tt;
+    }
+  
+  return mapped;
+}
+

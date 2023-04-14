@@ -53,7 +53,12 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
 			    param_t & param )
 {
 
+  //
+  // Track this EDF
+  //
 
+  pedf = &edf;
+  
   //
   // Inputs
   //
@@ -97,6 +102,8 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
 
   
   const bool dump_features = param.has( "dump" );
+
+  const bool output_features = param.has( "output-features" );
 
   
   // training (1) : make level-1 stats, stages, save (binary features, BFTR)
@@ -145,17 +152,9 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
       
       const int equivn = pops_opt_t::equivs.size();
 
-      // IGNORE: we allow missing equiv channels -- they are just 
+      // Note: we allow missing equiv channels -- they are just 
       // skipped below
-
-      // check all equivs exist [ to mapping, i.e. skip eq == 0
-      // as that is tested below (but allows for aliases) ] 
-      // for (int eq = 1; eq < equivn; eq++)
-      // 	{
-      // 	  int s = edf.header.signal( pops_opt_t::equivs[eq] );
-      // 	  //if ( s == -1 ) Helper::halt( "could not find " + pops_opt_t::equivs[eq] );
-      // 	}
-
+      
       std::vector<pops_sol_t> sols;
       int eq1 = 0;
       // default combione CONF = 0.0
@@ -178,22 +177,28 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
 	  logger << "\n";	  
 	}
       
-      if ( pops_opt_t::equiv_root != "" )
-	{
-	  
-	  if ( pops_t::specs.chs.find( pops_opt_t::equiv_root ) == pops_t::specs.chs.end() )
-	    {
-	      logger << "  ** equiv channel should be in from this list of 1 or more channels: ";
-	      std::map<std::string,pops_channel_t>::const_iterator ss =  pops_t::specs.chs.begin();
-	      while( ss != pops_t::specs.chs.end() )
+      // all 'originals' in an equiv set must exist in the feature specification (exactly)
+      if ( equivn )
+	{	  
+	  const std::map<std::string,std::string> & em = pops_opt_t::equivs[0];
+	  std::map<std::string,std::string>::const_iterator ee = em.begin();
+	  while ( ee != em.end() )
+	    {	      
+	      const std::string & eroot = ee->first;
+	      if ( pops_t::specs.chs.find( eroot ) == pops_t::specs.chs.end() )
 		{
-		  logger << " " << ss->first ;
-		  ++ss;
+		  logger << "  ** all equiv channel originals should be specified in the feature defs: ";
+		  std::map<std::string,pops_channel_t>::const_iterator ss =  pops_t::specs.chs.begin();
+		  while( ss != pops_t::specs.chs.end() )
+		    {
+		      logger << " " << ss->first ;
+		      ++ss;
+		    }
+		  logger << "\n";
+		  Helper::halt( "could not find root equivalence channel: " + eroot + " (see note above)" );	      
 		}
-	      logger << "\n";
-	      Helper::halt( "could not find root equivalence channel: " + pops_opt_t::equiv_root + " (see note above)" );	      
-	    }
-
+	      ++ee;
+	    } 
 	}
 
       //
@@ -222,31 +227,53 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
 	      // all done?
 	      if ( eq1 == equivn ) break;
 	      
-	      // otherwise, get the next channel
-	      pops_opt_t::equiv_swapin = pops_opt_t::equivs[ eq1 ];
+	      // otherwise, get the next set of channel mappings
+	      // (which includes self mapping at first )
+	      pops_opt_t::equiv_swapins = pops_opt_t::equivs[ eq1 ];
 	      ++eq1;
 	      
-	      // do we have this equiv channel?  if not, just skip
-	      
-	      if ( pops_opt_t::equiv_swapin != pops_opt_t::equiv_root )
+	      // do we have all equiv channels?  if not, just skip
+	      if ( eq1 != 1 ) 
 		{
-		  bool test = edf.header.has_signal( pops_opt_t::equiv_swapin );
-		  if ( ! test ) 
+		  std::map<std::string,std::string>::const_iterator ee = pops_opt_t::equiv_swapins.begin();
+		  bool all_present = true;
+		  while ( ee != pops_opt_t::equiv_swapins.end() )
 		    {
-		      logger << "  ** could not find " << pops_opt_t::equiv_swapin << " ... skipping\n";
+		      bool test = edf.header.has_signal( ee->second );
+		      if ( ! test ) 
+			{
+			  logger << "  ** could not find equivalence channel " 
+				 << ee->second << " (for " << ee->first << ")\n";   
+			  all_present = false;
+			  break;
+			}
+		      ++ee;
+		    }
+		  
+		  if ( ! all_present ) 
+		    {
+		      logger << "  ** could not find all equivalence sets...  skipping\n";
 		      continue;
 		    }
 		}
-	      
-	      // track which channel equivalent we are using
-	      writer.level( pops_opt_t::equiv_swapin , "CHEQ" );
-	      
-	      logger << "  now processing equivalent channel "
-		     << pops_opt_t::equiv_swapin
-		     << " (for " << pops_opt_t::equiv_root << ")\n";
-	      
-	    }
 
+	      // track which channel equivalent set we are using
+	      pops_opt_t::equiv_label = "";
+	      std::map<std::string,std::string>::const_iterator ee = pops_opt_t::equiv_swapins.begin();
+	      while ( ee != pops_opt_t::equiv_swapins.end() )
+		{
+		  if ( ee != pops_opt_t::equiv_swapins.begin() ) 
+		    pops_opt_t::equiv_label  += ";";
+		  pops_opt_t::equiv_label += ee->first + "->" + ee->second;
+		  ++ee;
+		}
+	      
+	      writer.level( pops_opt_t::equiv_label , "CHEQ" );
+	      
+	      logger << "  processing equivalent channel set " << pops_opt_t::equiv_label << "\n";
+		     	      
+	    }
+	
 	  //
 	  // get any staging (this should reset internals too, if repeating)
 	  //
@@ -318,19 +345,51 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
 	      O1.close();
 	    }
 
+	  //
+	  // Write epoch x feature matrix to standard output stream
+	  //
 
+	  if ( output_features )
+	    {
+	      //if ( equivn ) Helper::halt( "cannot specify output-features and equiv together" );
+	      
+	      std::vector<std::string> labels = pops_t::specs.select_labels();
+	      
+	      // std::cout << "l " << labels.size() << "\n"
+	      // 		<< X1.rows() << " " << X1.cols() << "\n"
+	      // 		<< E.size() << "\n";
+	     
+	      // E x FTR
+	      for (int i=0; i<X1.rows(); i++)
+		{
+
+		  writer.epoch( E[i] + 1 );
+		  
+		  for (int j=0; j<X1.cols(); j++)
+                    {
+		      if ( equivn )
+			writer.level( pops_opt_t::equiv_label + ":" + labels[j] , "FTR" );
+		      else
+			writer.level( labels[j] , "FTR" );
+		      writer.value( "X" , X1(i,j) );
+		    }
+		  writer.unlevel( "FTR" );
+		}
+	      writer.unepoch();
+	    }
+	  	  
 	  //
 	  // Load LGBM model if needed
 	  //
 	  
-	  if ( ! pops_t::lgbm_model_loaded )
+	  if ( pops_t::lgbm_model_loaded != model_file )
 	    {
 	      pops_t::lgbm.load_model( model_file );
 	      
 	      // if ( param.has( "config" ) ) 
 	      // 	pops_t::lgbm.load_config( param.value( "config" ) );	  
 	      
-	      pops_t::lgbm_model_loaded = true;
+	      pops_t::lgbm_model_loaded = model_file ;
 	    }
 
 	  
@@ -366,14 +425,13 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
 	  //
 	  
 	  pops_sol_t sol;
-	  
+	
 	  if ( equivn ) 
 	    {
-	      logger << "  Solution mapping " << pops_opt_t::equiv_swapin
-		     << " --> " <<  pops_opt_t::equiv_root << "\n";
+	      logger << "  Solution mapping " << pops_opt_t::equiv_label << "\n";
 	      
 	      summarize( &sol );
-	    
+	      
 	      sols.push_back( sol );
 	    }	 	    
 	  
@@ -438,11 +496,22 @@ pops_indiv_t::pops_indiv_t( edf_t & edf ,
 	}
       
       //
+      // Add annotations
+      //
+
+      if ( has_staging ) 
+	logger << "  adding POPS annotations (pN1, pN2, pN3, pR, pW)\n";
+      else
+	logger << "  adding POPS annotations (N1, N2, N3, R, W)\n";
+      
+      add_annots( edf , has_staging ? "p" : "" );      
+
+      //
       // All done, now summarize (& also print final confusion matrix)
       //
       
       summarize();
-      
+
       
     } // end of PREDICTION mode
   
@@ -453,7 +522,7 @@ bool pops_indiv_t::staging( edf_t & edf , param_t & param )
 {
 
   // calculate ne and staging, if present  
-  ne = edf.timeline.first_epoch();
+  ne = ne_total = edf.timeline.first_epoch();
   
   // get staging
   edf.timeline.annotations.make_sleep_stage( edf.timeline );
@@ -469,7 +538,8 @@ bool pops_indiv_t::staging( edf_t & edf , param_t & param )
   // check epochs line up, if staging present
   if ( has_staging && ne != edf.timeline.hypnogram.stages.size() )    
     {
-      logger << "  *** problem extracting stage information for trainer" <<  edf.id << "  ( -- skipping -- )\n";
+      logger << "  *** problem extracting stage information for trainer: " <<  edf.id << "  ( -- skipping -- )\n";
+      logger << "      (expecting " << ne << " epochs, observed " << edf.timeline.hypnogram.stages.size() << ")\n";
       return false;      
     }  
 
@@ -617,7 +687,7 @@ void pops_indiv_t::level1( edf_t & edf )
   // ensure we reset epoch count 'ne'
   //
 
-  ne = edf.timeline.first_epoch();
+  ne = ne_total = edf.timeline.first_epoch();
 
   //
   // score level-1 factors --> X1
@@ -666,16 +736,17 @@ void pops_indiv_t::level1( edf_t & edf )
       
       // primary?
       int slot = edf.header.signal( ss->first , silent_signal_search );
-
+      
       // match on an alias?
       if ( slot == -1 ) 
 	{
-
+	  
 	  const std::set<std::string> & aliases = ss->second.aliases;
-
+	  
 	  std::set<std::string>::const_iterator aa = aliases.begin();
 	  while ( aa != aliases.end() )
 	    {
+	  	      
 	      slot = edf.header.signal( *aa , silent_signal_search );
 	      if ( slot != -1 ) break;
 	      ++aa;
@@ -711,7 +782,7 @@ void pops_indiv_t::level1( edf_t & edf )
       
       ++ss;
     }
-
+  
 
   //
   // Get any indivi-level covariates (will be entered identically for every epoch)
@@ -772,31 +843,34 @@ void pops_indiv_t::level1( edf_t & edf )
 	      int slot1 = -1;
 	      int slot2 = -1;
 	      
-	      if ( pops_opt_t::equiv_root == siglab1 )
+	      std::map<std::string,std::string>::const_iterator equiv = pops_opt_t::equiv_swapins.find( siglab1 );
+	      if ( equiv != pops_opt_t::equiv_swapins.end() )
 		{		      
-		  if ( pops_opt_t::equiv_swapin == siglab1 )
+		  if ( equiv->second == siglab1 ) // self
 		    slot1 = signals(s1);
 		  else 
-		    slot1 = edf.header.signal( pops_opt_t::equiv_swapin );
+		    slot1 = edf.header.signal( equiv->second ); // will be present
 		}
 	      else // no swapping needed
 		slot1 = signals(s1);
 	      
-	      
+	      if ( slot1 == -1 )
+		Helper::halt( "could not find equiv channel " + equiv->second );
+	      	      
 	      // or the second channel has the equivalence?
-	      
-	      if ( pops_opt_t::equiv_root == siglab2 )
+	      equiv =pops_opt_t::equiv_swapins.find( siglab2 );
+	      if (  equiv != pops_opt_t::equiv_swapins.end() )
 		{
-		  if ( pops_opt_t::equiv_swapin == siglab2 )
+		  if ( equiv->second == siglab2 )
 		    slot2 = signals(s2);
 		  else 
-		    slot2 = edf.header.signal( pops_opt_t::equiv_swapin );
+		    slot2 = edf.header.signal( equiv->second );
 		}
 	      else // no swapping needed
 		slot2 = signals(s2);		  
 	      
-	      if ( slot1 == -1 || slot2 == -1 )
-		Helper::halt( "could not find equiv channel " + pops_opt_t::equiv_swapin );
+	      if ( slot2 == -1 )
+		Helper::halt( "could not find equiv channel " + equiv->second );
 	      
 	      // track
 	      cohchs.insert( slot1 );
@@ -838,7 +912,7 @@ void pops_indiv_t::level1( edf_t & edf )
 			 fft_segment_size , fft_segment_overlap , 
 			 WINDOW_TUKEY50 , false , false );
   
-
+  
   //
   // iterate over epochs
   //
@@ -849,7 +923,7 @@ void pops_indiv_t::level1( edf_t & edf )
     {
       
       int epoch = edf.timeline.next_epoch();      	  
-      
+      //      std::cout << " epoch " << epoch << "\n";
       if ( epoch == -1 ) break;
       
       if ( en == ne ) Helper::halt( "internal error: over-counted epochs" );
@@ -901,24 +975,25 @@ void pops_indiv_t::level1( edf_t & edf )
 	  int slot1;
 
 	  // swapping in an equivalent value?
-	  if ( pops_opt_t::equiv_root == siglab )
+	  std::map<std::string,std::string>::const_iterator equiv = pops_opt_t::equiv_swapins.find( siglab );
+	  if ( equiv != pops_opt_t::equiv_swapins.end() )
 	    {
 	      // if swap == self, then use original slot (i.e. this is based
 	      // on FTR file aliases. rather than EDF header aliases... awkward
 	      // but keep for now
 	      
-	      if ( pops_opt_t::equiv_swapin == siglab )
+	      if ( equiv->second == siglab ) // self swap 
 		slot1 = signals(s);
-	      else // do the swap
-		slot1 = edf.header.signal( pops_opt_t::equiv_swapin );
+	      else // else do the swap
+		slot1 = edf.header.signal( equiv->second );
 	    }
 	  else // no swapping needed
-	     slot1 = signals(s);
+	    slot1 = signals(s);
 	  
 	  //	  std::cout << "pops_opt_t::equiv_swapin = " << pops_opt_t::equiv_swapin << " " << slot1 << "\n";
 
 	  if ( slot1 == -1 )
-	    Helper::halt( "could not find equiv channel " + pops_opt_t::equiv_swapin );
+	    Helper::halt( "could not find equiv channel " + equiv->second );
 	  
 	  //
 	  // Get data
@@ -1300,16 +1375,29 @@ void pops_indiv_t::level1( edf_t & edf )
 	   
 	   if ( do_hjorth && ! bad_epoch )
 	     {
-	       double activity = 0 , mobility = 0 , complexity = 0;
-	       MiscMath::hjorth( d , &activity , &mobility , &complexity );
-	       // std::cout << "hj " << d->size() << "\t" 
-	       // 		 << activity << " " << mobility << " " << complexity << "\n";
+
+	       pops_spec_t spec = pops_t::specs.fcmap[ pops_feature_t::POPS_HJORTH ][ siglab ];
+
+	       const bool include_h1 = spec.narg( "h1" ) > 0.5 ;
 	       
-	       // use all 3 parameters (log-scaling H1)
+	       double activity = 0 , mobility = 0 , complexity = 0;
+
+	       MiscMath::hjorth( d , &activity , &mobility , &complexity );
+	       
+	       // use either 2 or 3 parameters (log-scaling H1)
 	       std::vector<int> cols = pops_t::specs.cols( pops_feature_t::POPS_HJORTH , siglab ) ;
-	       X1( en , cols[0] ) = activity > 0 ? log( activity ) : log( 0.0001 ) ;
-	       X1( en , cols[1] ) = mobility;
-	       X1( en , cols[2] ) = complexity;
+	       
+	       if ( include_h1 ) 
+		 {
+		   X1( en , cols[0] ) = activity > 0 ? log( activity ) : log( 0.0001 ) ;
+		   X1( en , cols[1] ) = mobility;
+		   X1( en , cols[2] ) = complexity;
+		 }
+	       else
+		 {
+		   X1( en , cols[0] ) = mobility;
+                   X1( en , cols[1] ) = complexity;
+		 }	       
 	     }
 
 	   //
@@ -1590,6 +1678,12 @@ void pops_indiv_t::SHAP()
 
 void pops_indiv_t::summarize( pops_sol_t * sol )
 {
+
+  //
+  // note - this may be called in '--eval-stages' context, in which case there is no
+  // atatched EDF.  This only matters for clocktime (hms) outputs below.  But, this
+  // is why we need to test for pedf being NULL or not. 
+  //
   
   std::map<int,double> dur_obs, dur_obs_orig, dur_predf, dur_pred1;
   
@@ -1601,17 +1695,72 @@ void pops_indiv_t::summarize( pops_sol_t * sol )
   //
 
   ne = E.size();
+
+
+  //
+  // track if epoch skipped
+  //
+
+  std::map<int,int> e2e;
+  
+  for (int e=0; e<ne; e++)
+    e2e[ E[e] ] = e ;
+  
   
   //
   // epoch-level output (posteriors & predictions)
   //  
   
+  //  logger << "Ne, neT = " << ne << " " << ne_total << " " << e2e.size() << "\n";
+    
+  clocktime_t starttime( pedf ? pedf->header.starttime : "." );
+  bool hms = pedf ? true : false; // if no EDF attached...
+  if ( pedf && ! starttime.valid )
+    {
+      logger << " ** could not find valid start-time in EDF header **\n";
+      hms = false;
+    }
+  
   double avg_pmax = 0;
-
-  for (int e=0; e<ne; e++)
+  
+  for (int epoch=0; epoch<ne_total; epoch++)
     {
       
-      writer.epoch( E[e] + 1 );
+      const bool skipped = e2e.find( epoch ) == e2e.end();
+      
+      //std::cout << " epoch " << epoch << " " << skipped << "\n";
+      
+      writer.epoch( epoch + 1 );
+
+      if ( hms )
+	{
+	  interval_t interval = pedf->timeline.epoch( epoch );
+	  
+	  double tp1_sec =  interval.start / (double)globals::tp_1sec;
+	  clocktime_t present1 = starttime;
+	  present1.advance_seconds( tp1_sec );
+	  // add down to 1/100th of a second                                                                                                                                                            
+           double tp1_extra = tp1_sec - (long)tp1_sec;
+
+           double tp2_sec =  interval.stop / (double)globals::tp_1sec;
+           clocktime_t present2 = starttime;
+           present2.advance_seconds( tp2_sec );
+           double tp2_extra = tp2_sec - (long)tp2_sec;
+
+           writer.value( "START"  , present1.as_string(':') +  Helper::dbl2str_fixed( tp1_extra , globals::time_format_dp ).substr(1) );
+           writer.value( "STOP"   , present2.as_string(':') +  Helper::dbl2str_fixed( tp2_extra , globals::time_format_dp ).substr(1) );
+	}
+
+      
+      if ( skipped )
+	{
+	  writer.value( "FLAG" , -1 );		    
+	  continue;
+	}
+
+      // this is in range of only 'valid' epochs 
+      // i.e. 'e' will align w/ P(), etc
+      const int e = e2e[ epoch ] ;
       
       // predicted stage
       int predx = -1;
@@ -1669,6 +1818,7 @@ void pops_indiv_t::summarize( pops_sol_t * sol )
 	      		  
 	    }	  
 
+	  // skipped --> -1
 	  // conc  --> 0
 	  // disc5 --> 1
 	  // disc3 --> 2
@@ -2363,6 +2513,43 @@ int pops_indiv_t::update_predicted( std::vector<int> * cnts )
     }  
 
   return ns.size();
+}
+
+
+void pops_indiv_t::add_annots( edf_t & edf , const std::string & prefix )
+{
+  
+  // ensure cleared if already present
+  edf.timeline.annotations.clear( prefix + "N1" );
+  edf.timeline.annotations.clear( prefix + "N2" );
+  edf.timeline.annotations.clear( prefix + "N3" );
+  edf.timeline.annotations.clear( prefix + "R" );
+  edf.timeline.annotations.clear( prefix + "W" );
+  
+  annot_t * aN1 = edf.timeline.annotations.add( prefix + "N1" );
+  annot_t * aN2 = edf.timeline.annotations.add( prefix + "N2" );
+  annot_t * aN3 = edf.timeline.annotations.add( prefix + "N3" );
+  annot_t * aR = edf.timeline.annotations.add( prefix + "R" );
+  annot_t * aW = edf.timeline.annotations.add( prefix + "W" );
+  
+  aN1->description = "N1, POPS prediction";
+  aN2->description = "N2, POPS prediction";
+  aN3->description = "N3, POPS prediction";
+  aR->description = "R, POPS prediction";
+  aW->description = "W, POPS prediction";
+    
+  int ne = E.size();
+  
+  for (int e=0; e<ne; e++)
+    {      
+      interval_t interval = edf.timeline.epoch( E[e] );      
+      if      ( PS[e] == POPS_WAKE ) aW->add( "." , interval , "." );
+      else if ( PS[e] == POPS_REM )  aR->add( "." , interval , "." );
+      else if ( PS[e] == POPS_N1 )   aN1->add( "." , interval , "." );
+      else if ( PS[e] == POPS_N2 )   aN2->add( "." , interval , "." );
+      else if ( PS[e] == POPS_N3 )   aN3->add( "." , interval , "." );
+    }
+      		  
 }
 
 #endif

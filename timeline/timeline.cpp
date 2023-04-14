@@ -212,6 +212,42 @@ void timeline_t::restructure( const std::set<int> & keep )
 }
 
 
+void timeline_t::create_discontinuous_timeline( const std::vector<uint64_t> & tps )
+{
+  
+  // this is only used when making a new merged EDF+D from multiple standard EDFs
+  // that contain gaps
+  
+  // we can assume that header.nr and header.record_duration_tp will have been set 
+  
+  total_duration_tp = 
+    (uint64_t)edf->header.nr * edf->header.record_duration_tp;      
+  last_time_point_tp = 0;
+
+  // check
+  if ( edf->header.nr != tps.size() )
+    Helper::halt( "internal error in timeline_t::create_discontinuous_timeline()" );
+  
+  // okay to use header.nr here, as this will only be called
+  // once, on first creating the new in-memory EDF+D
+        
+  for (int r = 0;r < edf->header.nr; r++)
+	{	  
+	  uint64_t tp = tps[r] ;
+	  tp2rec[ tp ] = r;
+	  rec2tp[ r ] = tp;
+	  rec2orig_rec[ r ] = r; // 1-to-1 mapping before any RE
+	  rec2tp_end[r] = last_time_point_tp = tp + edf->header.record_duration_tp - 1LLU;
+	  // last_time_point_tp will be updated, 
+	  // and end up being thelast (i.e. record nr-1).
+	}
+  
+  logger << "  set EDF+D timeline for " << edf->header.nr << " records\n";
+}
+
+
+
+
 interval_t timeline_t::record2interval( int r ) const
 { 
   std::map<int,uint64_t>::const_iterator ll = rec2tp.find(r);
@@ -698,6 +734,8 @@ int timeline_t::calc_epochs()
       // epochs have to be continuous in clocktime
       // putative start (i.e. start of record)
       uint64_t estart = rec2tp[r];
+
+      //std::cout << " r tp = " << r << "\t" << estart << "\n";
       
       // but, if we are allowing annot offset alignment, we may need to skip ahead a bit? (i.e. will go the 
       // the start of the next valid annot
@@ -705,23 +743,35 @@ int timeline_t::calc_epochs()
       //  align_annots( &estart , &record, start points... set<uint64_t> ) 
       
       std::set<uint64_t> astarts;
-
+      
       if ( annot_alignment )
 	{
-	  astarts = annotations.starts( epoch_align_annots );
-	  logger << "  within each segment, aligning epochs to " << astarts.size() << " annotations (" << epoch_align_str << ")\n";
 	  
-	  // this will advance the estart (tp) and spanning record (r) as needed	  
-	  const bool retcode = align_epochs( &estart , &r , astarts );
+	  astarts = annotations.starts( epoch_align_annots , epoch_length_tp );
+	  
+	  // this function allows for case where annotations are longer than the epoch size... cut into epoch duration
+	  // starts
+	  //     e.g.   0 -  30 
+	  //     60 -- 180
+	  
+	  // if epoch size = 30, implies possible starts of: 0 , 60 , 90 , 120 and 150 
 
+  	  logger << "  within each segment, aligning epochs to " << astarts.size() << " possible starting points from (" << epoch_align_str << ")\n";
+	  
+	  // this will advance the estart (tp) and spanning record (r) as needed
+	  const bool retcode = align_epochs( &estart , &r , astarts );
+	  
+	  // std::cout << " DONE align_epochs() :::  retcode = " << retcode << "\t";
+	  // std::cout << " estart = " << estart << "\n";
+	  
 	  // could not find any of the specified annotations to start alignment
 	  if ( ! retcode ) return 0;
 	  
 	}
-
+      
       // we've now found a start point:: see where it would end (i.e. will it fit in contiguous 
       // time, and figure out which records are spanned)
-
+      
       // for purpose of searching, skip last point
       // i.e. normally intervals are defined as END if 1 past the last point
       uint64_t estop  = estart + epoch_length_tp - 1LLU;
@@ -754,16 +804,17 @@ int timeline_t::calc_epochs()
 
 	  uint64_t rec_start = rec2tp[r];
 	  uint64_t rec_end   = rec2tp_end[r];
-	  
-// 	  std::cout << "dets " << rec_start << " " << rec_end << "\t"
-// 		    << estart << " " << erestart << " " << estop << "\n";
+
+	  // std::cout << "dets " << rec_start << " " << rec_end << "\t"
+ 	  // 	    << estart << " " << erestart << " " << estop << "\n";
 
 	  //
 	  // Will the next epoch potentially come from this record?
 	  //
-	  
+	  //std::cout << " erestart " << erestart << "\n";
 	  if ( erestart >= rec_start && erestart <= rec_end )
 	    {
+	      //std::cout << "  track this is the restarting record\n";
 	      // track this is the restarting record
 	      restart_rec = r;
 	    }
@@ -774,12 +825,14 @@ int timeline_t::calc_epochs()
 	  
 	  if ( estop <= rec_end )
 	    {
+
+	      //std::cout << " ** EPOCH WILL END IN THIS REC\n";
 	      
 	      // add to list of epochs (note: adding +1 when saving interval)
 	      interval_t saved_interval( estart , estop + 1LLU );
 	      epochs.push_back( saved_interval );
 	      
-	      // std::cout << "E " << epochs.size() << " adding " << estart << " -- " << estop + 1LLU << "\n";
+	      //std::cout << "E " << epochs.size() << " adding " << estart << " -- " << estop + 1LLU << "\n";
 	      
 	      // add this last record to the epoch in any case
 	      putative_r2e[ r ].insert( e );
@@ -813,7 +866,7 @@ int timeline_t::calc_epochs()
 	      // clear temporary markers
 	      putative_e2r.clear();
 	      putative_r2e.clear();
-    
+     
 	      // move on to the next epoch
 	      ++e;
 	    
@@ -834,6 +887,7 @@ int timeline_t::calc_epochs()
 
 	      if ( restart_rec == -1 ) 
 		{		  
+		  //std::cout << " setting to -1, assume next E starsts in next R\n";
 		  // we need to jump to the next record
 		  // and no need to check for discontinuity
 		  // as we are starting a new epoch in any case
@@ -865,9 +919,11 @@ int timeline_t::calc_epochs()
 	      //
 	      // Any annot-alignment?
 	      //
-
+	      
 	      if ( annot_alignment )
 		{
+		  // std::cout << " epoch alignment for this next epochs...."
+		  // 	    << " estart r " << estart << "\t" << r << "\n";
 		  // skip ahead?
 		  const bool retcode = align_epochs( &estart , &r , astarts );
 		  if ( ! retcode ) break;		  
@@ -960,7 +1016,7 @@ int timeline_t::calc_epochs()
 
   if ( 0 ) 
     {
-      std::cout << "REC 2 E\n";
+      //      std::cout << "REC 2 E\n";
       
       std::map<int,std::set<int> >::const_iterator ii = rec2epoch.begin();
       while ( ii != rec2epoch.end() )
@@ -1012,6 +1068,16 @@ interval_t timeline_t::wholetrace() const
 {  
   //std::cout << "LTP = " << last_time_point_tp + 1LLU << "\n";
   // end is defined as 1 past the last time point
+
+  // check that we don't have a mask set::: if we do, give a warning to the console
+
+  if ( mask_set )
+    logger << "\n"
+	   << "  *** warning - running a command that pulls the whole trace\n"
+	   << "  ***           but currently an epoch mask set has been set;\n"
+	   << "  ***           for this operation to skip masked epochs,\n"
+	   << "  ***           you need to run RE (RESTRUCTURE) beforehand\n";
+  
   return interval_t( 0 , last_time_point_tp + 1LLU );
 }
 
@@ -2005,17 +2071,23 @@ interval_t timeline_t::collapse( const interval_t & interval ) const
   
   bool any = interval2records( interval , srate , &start_rec , &start_smp , &stop_rec , &stop_smp );
 
+  //  std::cout << " start rec smp = " << start_rec << " " << start_smp << "\n";
+  //std::cout << " stop rec smp = " << stop_rec << " " << stop_smp << "\n";
+  //  ++stop_smp;
+  
   // interval has to fall completely in a valid area
   if ( ! any ) return interval_t( 1LLU , 0LLU );
 
   if ( rec2orig_rec.find( start_rec ) == rec2orig_rec.end() ) return interval_t( 1LLU , 0LLU );
   if ( rec2orig_rec.find( stop_rec ) == rec2orig_rec.end() ) return interval_t( 1LLU , 0LLU );
 
-  start_rec = rec2orig_rec.find(  start_rec )->second;
+  start_rec = rec2orig_rec.find( start_rec )->second;
   stop_rec = rec2orig_rec.find( stop_rec )->second;
   
   uint64_t start = start_rec * edf->header.record_duration_tp + ( start_smp / (double)srate ) * globals::tp_1sec ;
-  uint64_t stop = stop_rec * edf->header.record_duration_tp + ( stop_smp / (double)srate ) * globals::tp_1sec ;
+
+  // nb + add one extra STOP smp here, +1 end
+  uint64_t stop = stop_rec * edf->header.record_duration_tp + ( (stop_smp+1) / (double)srate ) * globals::tp_1sec ;
 
   return interval_t( start , stop );
     
@@ -2656,52 +2728,68 @@ void timeline_t::add_mask_annot( const std::string & tag )
   
 }
 
-void timeline_t::mask2annot( const std::string & path , const std::string & tag , bool with_id ) 
+// void timeline_t::mask2annot( const std::string & path , const std::string & tag , bool with_id ) 
+// {
+
+//   if ( ! mask_set ) return;
+  
+//   std::string path2 = path[ path.size() - 1 ] != globals::folder_delimiter 
+//     ? path + globals::folder_delimiter 
+//     : path ; 
+  
+//   std::string filename = with_id ? ( path2 + tag + "-" + edf->id + ".annot" ) : ( path2 + tag + ".annot" ) ;
+  
+//   annot_t * a = annotations.add( tag );
+//   a->description = "Mask based on " + tag ;
+//   //a->types[ "M" ] = globals::A_BOOL_T;
+  
+//   const int ne = mask.size();
+  
+//   for (int e=0;e<ne;e++)
+//     {
+//       if ( mask[e] )
+// 	{
+// 	  instance_t * instance = a->add( tag , epoch(e) , "." );
+// 	  //instance->set( "M" , true );
+// 	}
+//     }
+
+//   a->save( filename );
+
+//   // this will also retain the annotatiton 'tag', so it can be used
+//   // downstream by explicitly requesting the 'tag' annotation even if
+//   // the mask changes (i.e. rather than delete the annotation here)
+  
+// }
+
+
+
+void timeline_t::dumpmask( const param_t & param )
 {
 
-  if ( ! mask_set ) return;
-  
-  std::string path2 = path[ path.size() - 1 ] != globals::folder_delimiter 
-    ? path + globals::folder_delimiter 
-    : path ; 
-  
-  std::string filename = with_id ? ( path2 + tag + "-" + edf->id + ".annot" ) : ( path2 + tag + ".annot" ) ;
-  
-  annot_t * a = annotations.add( tag );
-  a->description = "Mask based on " + tag ;
-  //a->types[ "M" ] = globals::A_BOOL_T;
-  
-  const int ne = mask.size();
-  
-  for (int e=0;e<ne;e++)
-    {
-      if ( mask[e] )
-	{
-	  instance_t * instance = a->add( tag , epoch(e) , "." );
-	  //instance->set( "M" , true );
-	}
-    }
+  // also dump an 
+  const bool dump_annot = param.has( "annot" );
+  const std::string annot_str = dump_annot ? param.value( "annot" ) : "" ; 
 
-  a->save( filename );
-
-  // this will also retain the annotatiton 'tag', so it can be used
-  // downstream by explicitly requesting the 'tag' annotation even if
-  // the mask changes (i.e. rather than delete the annotation here)
+  // default is to make annot when an epoch is /masked/ (versus opposite)
+  const bool annot_unmasked = param.yesno( "annot-unmasked" );
+				   
+  annot_t * ann = dump_annot ? annotations.find( annot_str ) : NULL ; 
   
-}
-
-
-
-void timeline_t::dumpmask()
-{
-
+  // no output?
+  const bool output = param.has( "output" ) && param.yesno( "output" ) == false ; 
+  
   // no mask set: means all clear so display that
-  //if ( ! mask_set ) return;
+  // if ( ! mask_set ) return;
 
   first_epoch();
-  
-  logger << "  dumping MASK\n";
 
+  if ( output ) 
+    logger << "  dumping MASK\n";
+  if ( dump_annot )
+    logger << "  creating annotation " << annot_str << " based on mask == " << ( annot_unmasked ? "FALSE" : "TRUE" ) << "\n";
+  
+  
   while ( 1 ) 
     {
       
@@ -2710,7 +2798,7 @@ void timeline_t::dumpmask()
       if ( e == -1 ) break;
       
       interval_t interval = epoch( e );
-
+      
       // EPOCH_INTERVAL will already have been output by the EPOCH command
       writer.epoch( display_epoch( e ) );
       //      writer.var(   "INTERVAL" , "Epoch time start/stop" );
@@ -2718,6 +2806,14 @@ void timeline_t::dumpmask()
       //      writer.value( "INTERVAL" , interval.as_string() );
       writer.value( "EMASK" , mask_set ? mask[e] : false );
 
+      
+      if ( ann )
+	{
+	  if ( annot_unmasked && ! mask_set ) 
+	    ann->add( "." , interval , "." );
+	  else if ( mask_set && ! annot_unmasked )
+	    ann->add( "." , interval , "." );
+	}
     }
 
   writer.unepoch();
@@ -2930,7 +3026,7 @@ void timeline_t::load_interval_list_mask( const std::string & f , bool exclude )
   // Make sure that we have a time-track set
   //
   
-  edf->add_continuous_time_track();
+  edf->add_time_track();
   
     
   return;
@@ -4599,11 +4695,19 @@ int timeline_t::whole_recording_epoch_dur() {
 
 bool timeline_t::align_epochs( uint64_t * tp , int * rec , const std::set<uint64_t> & annots )
 {
+
+  // std::cout << " tp = " << *tp << "\t"
+  // 	    << " rec = " << *rec << "\t"
+  // 	    << " annots.s() = " << annots.size() << "\n";
   
   std::set<uint64_t>::const_iterator ii = annots.begin();
   while ( ii != annots.end() )
     {
+      //      std::cout << "considering annot = " << *ii << "\n";
+
+      // if this annot starts before the record
       if ( *ii < *tp ) { ++ii; continue; }
+      //std::cout << " setting tp = " << *tp << "\n";
       *tp = *ii;
       break;
     }
@@ -4615,12 +4719,15 @@ bool timeline_t::align_epochs( uint64_t * tp , int * rec , const std::set<uint64
     {
       interval_t reci = record2interval( *rec );
       // unable to find this record
-      if ( reci.start == 0 && reci.stop == 0 ) return false;      
+      if ( reci.start == 0 && reci.stop == 0 )  return false; 
       if ( *tp >= reci.start && *tp <= reci.stop ) return true;
       // advance to the next record and check
+      //std::cout << " advancing rec = " << *rec << "\n";
       (*rec)++;
     }
 
+  //  std::cout << " DONE\n";
+  
   // all done
   return true;
   

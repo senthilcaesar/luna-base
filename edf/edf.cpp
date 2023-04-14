@@ -278,10 +278,11 @@ void edf_t::description( const param_t & param )
 	++n_annot_channels_sel;
     }
 
-  clocktime_t et( header.starttime );
+  clocktime_t et( header.startdate, header.starttime );
   if ( et.valid )
     {
-      double time_sec = ( timeline.last_time_point_tp * globals::tp_duration ) ; 
+      // go to next time point /after/ end
+      double time_sec = ( timeline.last_time_point_tp+1LLU ) * globals::tp_duration ; 
       et.advance_seconds( time_sec );
     }
   
@@ -300,6 +301,16 @@ void edf_t::description( const param_t & param )
 	    << header.nr * header.record_duration << " sec" 
 	    << "\n"; // not fractional 
 
+  if ( header.edfplus && ! header.continuous )
+    {
+      clocktime_t st( header.startdate , header.starttime ); // include dates
+      double diff_secs = clocktime_t::ordered_difference_seconds( st , et );
+      clocktime_t ot( "00.00.00" );
+      ot.advance_seconds( diff_secs );
+      std::cout << "Duration (w/ gaps): "
+		<< ot.as_string() << "  " << diff_secs << " sec\n";
+    }
+  
   if ( n_data_channels_sel < n_data_channels )
     std::cout << "# signals         : " << n_data_channels_sel << " selected (of " << n_data_channels << ")\n";
   else
@@ -357,7 +368,10 @@ void edf_t::report_aliases() const
 void edf_t::terse_summary( param_t & param )
 {
 
-  signal_list_t signals = header.signal_list( param.value( "sig" ) );
+  // only non-annot signals here
+  const bool NO_ANNOTS = true; 
+
+  signal_list_t signals = header.signal_list( param.value( "sig" ) , NO_ANNOTS );
   
   const int ns1 = signals.size();
 
@@ -390,7 +404,7 @@ void edf_t::terse_summary( param_t & param )
   clocktime_t et( header.starttime );
   if ( et.valid )
     {
-      double time_sec = ( timeline.last_time_point_tp * globals::tp_duration ) ;
+      double time_sec = ( timeline.last_time_point_tp+1LLU) * globals::tp_duration ;
       et.advance_seconds( time_sec );
       writer.value( "STOP_TIME" , et.as_string() );
     }
@@ -560,6 +574,7 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
 
     }
 
+    
   // Number and direction of records/signals
   
   nr                   = edf_t::get_int( &q , 8 );
@@ -603,7 +618,6 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
   
   for (int s=0;s<ns_all;s++)
     {
-      
       // signal label, trim leading/trailing spaces
       std::string l = Helper::trim( edf_t::get_string( &p , 16 ) );
 
@@ -613,9 +627,16 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
 	l = Helper::search_replace( l , ' ' , globals::space_replacement );
 
       // global sanitization of channel labels?
+      // but, if allowing spaces, then make these exempt
+      // if either 'sanitize_everything' then retrim w/ underscore
       if ( globals::sanitize_everything && ! annotation )
-	l = Helper::sanitize( l );
-	
+	{
+	  if ( globals::replace_channel_spaces )
+	    l = Helper::trim( Helper::sanitize( l ) , '_' ) ;
+	  else // allow spaces in a sanitized version still
+	    l = Helper::trim( Helper::sanitize( l , ' ' ) , '_' ) ;
+	}
+
       // make all data-channels upper case?
       if ( globals::uppercase_channels && ! annotation )
 	l = Helper::toupper( l );
@@ -651,6 +672,7 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
       label_all[ uc_l ] = s ;
       
     }
+
   
   // for each signal, does it match?
   // (and if so, change this to "standard" form)
@@ -660,7 +682,7 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
       
       // retrieve temp label
       std::string l = tlabels[s];
-
+      
       // this match function will change 'l' to match any primary aliase
       // it does a case-insensitive match, but returns the correct (preferred-case) version
       
@@ -684,11 +706,12 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
 	  if ( globals::skip_edf_annots && continuous )
 	    include = false;
 	}
-
+    
       //
       // add this channel in 
       //
 
+      
       if ( include ) 
 	{
 
@@ -705,9 +728,8 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
 	  
 	  // first annotation channel is time-track
 	  if ( annotation && t_track == -1 ) 
-	    {
-	      t_track = label.size(); 
-	    }
+	    t_track = label.size();
+
 
 	  // label mapping only to non-annotation channels
 	  if ( ! annotation ) 
@@ -733,11 +755,7 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
   for (int s=0;s<ns_all;s++)
     {
       if ( channels.find(s) != channels.end() ) 
-	{
-
-	  phys_dimension.push_back( Helper::trim( edf_t::get_string( &p , 8 ) ) );
-
-	}
+	phys_dimension.push_back( Helper::trim( edf_t::get_string( &p , 8 ) ) );
       else
 	edf_t::skip( &p , 8 );
     }
@@ -792,6 +810,16 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
   for (int s=0;s<ns_all;s++)
     {
       int x = edf_t::get_int( &p , 8 );
+
+      // SR == 0 Hz ? 
+      if ( x == 0 )
+	logger << "  *** warning, " << s << " has SR of 0 and should be dropped\n";
+      
+      // non-integer SR ? 
+      double sr = x / record_duration;
+      if ( fabs( trunc(sr) - sr ) > 1e-8 )
+	logger << "  *** warning, signal " << s << " has a non-integer SR - advise to RESAMPLE\n";
+      
       if ( channels.find(s) != channels.end() )
 	n_samples.push_back( x );      
       n_samples_all.push_back( x );
@@ -835,7 +863,7 @@ std::set<int> edf_header_t::read( FILE * file , edfz_t * edfz , const std::set<s
       offset.push_back( ( physical_max[s] / bv ) - digital_max[s] ) ;
     }  
   
-
+  
   // clean up buffer
   delete [] p0 ;
 
@@ -1344,7 +1372,6 @@ bool edf_t::attach( const std::string & f ,
   //
   // Store filename and ID
   //
-
   
   // expand() expands out any ~/ notation to full path
   filename = Helper::expand( f ) ;
@@ -1361,8 +1388,7 @@ bool edf_t::attach( const std::string & f ,
 
   bool edfz_mode = Helper::file_extension( filename , "edfz" )
     || Helper::file_extension( filename , "edf.gz" ); 
-  
-  
+
   //
   // Attach the file
   //
@@ -1428,7 +1454,35 @@ bool edf_t::attach( const std::string & f ,
   
   inp_signals_n = header.read( file , edfz , inp_signals );
   
+
+  //
+  // anon header info?
+  //
+
+  if ( globals::anon )
+    {
+      // ID, recording info and startdate --> NULL 
+      header.patient_id = header.edfplus ? "X X X X" : ".";
+      header.recording_info = header.edfplus ? "Startdate X X X X" : ".";
+      header.startdate = "01.01.85";
+    }
+
+  //
+  // force EDF start times/dates
+  //
+
+  if ( globals::force_starttime != "" )
+    {
+      header.starttime = globals::force_starttime;
+      logger << "  forced start-time to " << header.starttime << "\n";
+    }
   
+  if ( globals::force_startdate != "" )
+    {
+      header.startdate = globals::force_startdate;
+      logger << "  forced start-date to " << header.startdate << "\n";
+    }
+
   //
   // Swap out any signal label aliases at this point
   //
@@ -1438,7 +1492,7 @@ bool edf_t::attach( const std::string & f ,
   //
   // EDF+ requires a time-track
   //
-  
+
   if ( header.edfplus && header.time_track() == -1 ) 
     {
       if ( !header.continuous ) 
@@ -1446,7 +1500,7 @@ bool edf_t::attach( const std::string & f ,
 
       logger << " EDF+ [" << filename << "] did not contain any time-track: adding...\n";
 
-      add_continuous_time_track();
+      add_time_track();
 
     }
 
@@ -1548,16 +1602,21 @@ bool edf_t::attach( const std::string & f ,
 
   if ( ! silent ) 
     {
-      logger << " duration: " << Helper::timestring( timeline.total_duration_tp , '.' , false )  // not fractional
-	     << " | " << timeline.total_duration_tp * globals::tp_duration << " secs";
+      
+      logger << " duration " << Helper::timestring( timeline.total_duration_tp , '.' , false )  // not fractional
+	     << ", " << timeline.total_duration_tp * globals::tp_duration << "s";
       
       clocktime_t et( header.starttime );
+      
       if ( et.valid )
 	{
-	  double time_sec = ( timeline.last_time_point_tp * globals::tp_duration ) ;
+	  // nb. going to one past end:
+	  double time_sec = ( (timeline.last_time_point_tp+1LLU) * globals::tp_duration ) ;
 	  et.advance_seconds( time_sec );
-	  logger << " | clocktime " << header.starttime << " - " << et.as_string() ;
+	  logger << " | time " << header.starttime << " - " << et.as_string() ;
 	}
+
+      logger << " | date " << header.startdate;
       logger << "\n";
       
       //	 << " hms, last time-point " << Helper::timestring( ++timeline.last_time_point_tp ) << " hms after start\n";
@@ -1728,113 +1787,121 @@ std::vector<double> edf_t::fixedrate_signal( uint64_t start ,
 //
 
 
-bool edf_header_t::write( FILE * file )
+bool edf_header_t::write( FILE * file , const std::vector<int> & ch2slot )
 {
+
+  // new number of channels (might be less than original)
+
+  const int ns2 = ch2slot.size();
   
   // regarding the nbytes_header variable, although we don't really
   // use it, still ensure that it is properly set (i.e. we may have
-  // added/removed signals, so we need to update before making the EDF
+  // added/removed signals, so we need to update before making the EDF)
   
-  nbytes_header = 256 + ns * 256;
+  const int nbytes_header2 = 256 + ns2 * 256;
   
   writestring( version , 8 , file );
   writestring( patient_id , 80 , file );
   writestring( recording_info , 80 , file );
   writestring( startdate , 8 , file );
   writestring( starttime , 8 , file );
-  writestring( nbytes_header , 8 , file );
+  writestring( nbytes_header2 , 8 , file );
   fwrite( reserved.data() , 1 , 44 , file );
   writestring( nr , 8 , file );
   writestring( record_duration , 8 , file );
-  writestring( ns , 4 , file );
+  writestring( ns2 , 4 , file );
 
-  // for each of 'ns' signals
+  // for each of 'ns2' signals
   
-  for (int s=0;s<ns;s++)
-    writestring( label[s], 16, file );
+  for (int s=0;s<ns2;s++)
+    writestring( label[ ch2slot[s] ], 16, file );
   
-  for (int s=0;s<ns;s++)
-    writestring( transducer_type[s], 80, file );
+  for (int s=0;s<ns2;s++)
+    writestring( transducer_type[ch2slot[s]], 80, file );
 
-  for (int s=0;s<ns;s++)
-    writestring( phys_dimension[s], 8, file );
+  for (int s=0;s<ns2;s++)
+    writestring( phys_dimension[ch2slot[s]], 8, file );
 
-  for (int s=0;s<ns;s++)
-    writestring( physical_min[s], 8, file );
+  for (int s=0;s<ns2;s++)
+    writestring( physical_min[ch2slot[s]], 8, file );
 
-  for (int s=0;s<ns;s++)
-    writestring( physical_max[s], 8, file );
+  for (int s=0;s<ns2;s++)
+    writestring( physical_max[ch2slot[s]], 8, file );
 
-  for (int s=0;s<ns;s++)
-    writestring( digital_min[s], 8, file );
+  for (int s=0;s<ns2;s++)
+    writestring( digital_min[ch2slot[s]], 8, file );
 
-  for (int s=0;s<ns;s++)
-    writestring( digital_max[s], 8, file );
+  for (int s=0;s<ns2;s++)
+    writestring( digital_max[ch2slot[s]], 8, file );
 
-  for (int s=0;s<ns;s++)
-    writestring( prefiltering[s], 80, file );
+  for (int s=0;s<ns2;s++)
+    writestring( prefiltering[ch2slot[s]], 80, file );
 
-  for (int s=0;s<ns;s++)
-    writestring( n_samples[s], 8, file );
+  for (int s=0;s<ns2;s++)
+    writestring( n_samples[ch2slot[s]], 8, file );
   
-  for (int s=0;s<ns;s++)
-    writestring( signal_reserved[s], 32, file );
+  for (int s=0;s<ns2;s++)
+    writestring( signal_reserved[ch2slot[s]], 32, file );
   
   return true;
 }
 
 
 
-bool edf_header_t::write( edfz_t * edfz )
+bool edf_header_t::write( edfz_t * edfz , const std::vector<int> & ch2slot )
 {
+
+  // new number of channels (might be less than original)
+
+  const int ns2 = ch2slot.size();
   
   // regarding the nbytes_header variable, although we don't really
   // use it, still ensure that it is properly set (i.e. we may have
   // added/removed signals, so we need to update before making the EDF
-  nbytes_header = 256 + ns * 256;
+  const int nbytes_header2 = 256 + ns2 * 256;
   
   edfz->writestring( version , 8 );
   edfz->writestring( patient_id , 80 );
   edfz->writestring( recording_info , 80 );
   edfz->writestring( startdate , 8 );
   edfz->writestring( starttime , 8 );
-  edfz->writestring( nbytes_header , 8 );
+  edfz->writestring( nbytes_header2 , 8 );
   edfz->write( (byte_t*)reserved.data() , 44 );
   edfz->writestring( nr , 8 );
   edfz->writestring( record_duration , 8 );
-  edfz->writestring( ns , 4 );
+  edfz->writestring( ns2 , 4 ); // ns2
 
-  // for each of 'ns' signals
+  // for each of 'ns2' signals
   
-  for (int s=0;s<ns;s++)
-    edfz->writestring( label[s], 16 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( label[ch2slot[s]], 16 );
   
-  for (int s=0;s<ns;s++)
-    edfz->writestring( transducer_type[s], 80 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( transducer_type[ch2slot[s]], 80 );
 
-  for (int s=0;s<ns;s++)
-    edfz->writestring( phys_dimension[s], 8 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( phys_dimension[ch2slot[s]], 8 );
 
-  for (int s=0;s<ns;s++)
-    edfz->writestring( physical_min[s], 8 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( physical_min[ch2slot[s]], 8 );
 
-  for (int s=0;s<ns;s++)
-    edfz->writestring( physical_max[s], 8 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( physical_max[ch2slot[s]], 8 );
 
-  for (int s=0;s<ns;s++)
-    edfz->writestring( digital_min[s], 8  );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( digital_min[ch2slot[s]], 8  );
 
-  for (int s=0;s<ns;s++)
-    edfz->writestring( digital_max[s], 8 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( digital_max[ch2slot[s]], 8 );
 
-  for (int s=0;s<ns;s++)
-    edfz->writestring( prefiltering[s], 80 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( prefiltering[ch2slot[s]], 80 );
 
-  for (int s=0;s<ns;s++)
-    edfz->writestring( n_samples[s], 8 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( n_samples[ch2slot[s]], 8 );
   
-  for (int s=0;s<ns;s++)
-    edfz->writestring( signal_reserved[s], 32 );
+  for (int s=0;s<ns2;s++)
+    edfz->writestring( signal_reserved[ch2slot[s]], 32 );
   
   return true;
 }
@@ -1843,13 +1910,16 @@ bool edf_header_t::write( edfz_t * edfz )
 
 
 
-bool edf_record_t::write( FILE * file )
+bool edf_record_t::write( FILE * file , const std::vector<int> & ch2slot )
 {
 
-  
-  for (int s=0;s<edf->header.ns;s++)
+  const int ns2 = ch2slot.size();
+
+  for (int s2=0; s2 < ns2; s2++)
     {
-      
+      // get actual from-slot 
+      const int s = ch2slot[s2];
+
       const int nsamples = edf->header.n_samples[s];
 
       //
@@ -1857,7 +1927,7 @@ bool edf_record_t::write( FILE * file )
       //
 
       if ( edf->header.is_data_channel(s) )
-	{      
+	{
 	  for (int j=0;j<nsamples;j++)
 	    {	  
 	      char a , b;
@@ -1872,12 +1942,15 @@ bool edf_record_t::write( FILE * file )
       //
       
       if ( edf->header.is_annotation_channel(s) )
-	{      	  	  
+	{
+	  //std::cout << " ANNOT WRT ";
 	  for (int j=0;j< 2*nsamples;j++)
 	    {	  	      
 	      char a = j >= data[s].size() ? '\x00' : data[s][j];	      
-	      fputc( a , file );	      
+	      //std::cout << a ;
+	      fputc( a , file );
 	    }
+	  //std::cout << "\n";
 	}
     
     }
@@ -1886,14 +1959,16 @@ bool edf_record_t::write( FILE * file )
 }
 
 
-bool edf_record_t::write( edfz_t * edfz )
+bool edf_record_t::write( edfz_t * edfz , const std::vector<int> & ch2slot )
 {
-
-  // check if this has been read?
   
-  for (int s=0;s<edf->header.ns;s++)
+  const int ns2 = ch2slot.size();
+  
+  for (int s2=0; s2 < ns2; s2++)
     {
       
+      const int s = ch2slot[s2];
+
       const int nsamples = edf->header.n_samples[s];
 
       //
@@ -1958,6 +2033,7 @@ bool  edf_t::is_actually_standard_edf()
 
 bool edf_t::is_actually_discontinuous() 
 {
+
   // definitely continuous
   if ( header.continuous ) return false;
   
@@ -1988,19 +2064,18 @@ bool edf_t::is_actually_discontinuous()
       if ( r == -1 )
 	{
 	  // make this the 'previous'
-	   tp0 = tp;
-	   segend = true;
+	  tp0 = tp;
+	  segend = true;
 	}
       else
 	{
 	  tp = timeline.rec2tp[r] ;
-
 	  // discontinuity / end of segment?
 	  segend = tp - tp0 != header.record_duration_tp ;
 	}
-
+      
       // record this segment 
-
+	   
       if ( segend )
 	{
 	  ++num_segments ;	  
@@ -2017,8 +2092,12 @@ bool edf_t::is_actually_discontinuous()
 }
 
 
-bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bool always_edfd )
+bool edf_t::write( const std::string & f , bool as_edfz , int write_as_edf , bool always_edfd , const std::vector<int> * p_ch2slot )
 {
+
+  // write_as_edf 0   -- no, do not force as EDF
+  //              1   -- yes, force as EDF but reset start time
+  //              2   -- yes, force as EDF and set starttime to NULL (00.00.00) w/ message
   
   //
   // Is this EDF+ truly discontinuous?  i.e. a discontinuous flag is set after any RESTRUCTURE
@@ -2046,14 +2125,14 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
   // Reset start-time to NULL (i.e. to writing as standard EDF but is actually discontinuous, then)
   // clocktimes will not make sense
   //
-
-  bool null_starttime = write_as_edf && actually_EDFD; 
+  
+  bool null_starttime = write_as_edf == 2 && actually_EDFD; 
   
   //
   // Force as standard EDF? 
   //
 
-  if ( write_as_edf || actually_EDF )
+  if ( ( write_as_edf || actually_EDF ) && ! always_edfd ) 
     {
       logger << "  writing as a standard EDF\n";
       set_edf();
@@ -2062,7 +2141,8 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
   //
   // Deal with start time?  If writing as a truly discontinuous EDF+D, then
   // keep start-time as is (i.e. first epoch might not be 0 seconds).  But if
-  // writing as a EDF+C, then make start time == 
+  // writing as a EDF+C, then make start time == first record (or even if EDF
+  // unless we are told otherwise) 
   //
     
   if ( null_starttime ) 
@@ -2070,10 +2150,45 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
       logger << "  setting EDF starttime to null (00.00.00)\n";
       header.starttime = "00.00.00";
     }
-  else if ( make_EDFC )  // no changes for EDF+D
+  else if ( write_as_edf == 1 || make_EDFC )  // no changes for EDF+D
     {      
       reset_start_time();
     }
+  
+  
+  //
+  // By default, ch2slot will be 0,1,2,...,ns-1   i.e. a straight mapping/ordering of all channels
+  //   when writing header and records, we iterate over ch2slot rather than 0..ns-1 however, 
+  //   i.e. to allow scenario where we want a reduced set, or a different ordering
+  //   this is passed in via the `channels` option of WRITE
+  //    where proc_write() will first have checked that all channels actually existed
+  //    and will have mapped to the slot numbers.  Therefore, at this point we can
+  //    always assume that this will be valid
+  //
+  
+  std::vector<int> ch2slot;
+
+  // a pre-specified channel list?
+  if ( p_ch2slot != NULL ) 
+    ch2slot = *p_ch2slot;
+  else
+    {
+      // if channels not explicitly specified
+      // just take all, in the order they are already in
+      for (int s=0; s<header.ns; s++)
+	ch2slot.push_back(s);
+
+    }
+  
+  const int ns2 = ch2slot.size();
+
+  if ( ns2 == 0 )
+    {
+      logger << "  *** no channels to write to a new EDF... bailing\n";
+      return false;
+    }
+  else
+    logger << "  writing " << ns2 << " channels\n";
   
   
   //
@@ -2100,15 +2215,14 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
       if ( make_EDFC ) set_continuous();
 
       // write header
-      header.write( outfile );
-      
+      header.write( outfile , ch2slot );
+
       // change back if needed, as subsequent commands after will be happier
       if ( make_EDFC ) set_discontinuous();
 
       int r = timeline.first_record();
       while ( r != -1 ) 
 	{
-	  
 	  // we may need to load this record, before we can write it
 	  if ( ! loaded( r ) )
 	    {
@@ -2117,7 +2231,8 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
 	      records.insert( std::map<int,edf_record_t>::value_type( r , record ) );	      
 	    }
 	  
-	  records.find(r)->second.write( outfile );
+	  records.find(r)->second.write( outfile , ch2slot );
+	  
 	  r = timeline.next_record(r);
 	}
       
@@ -2141,8 +2256,10 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
 
       
       if ( make_EDFC ) set_continuous();
+
       // write header (as EDFZ)
-      header.write( &edfz );
+      header.write( &edfz , ch2slot );
+
       if ( make_EDFC ) set_discontinuous();
 
       
@@ -2174,9 +2291,9 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
 	  
 	  // write to the index
 	  edfz.add_index( r , offset , timeline.timepoint( r ) , edf_annot_str  );
-		  
+	  
 	  // now write to the .edfz
-	  records.find(r)->second.write( &edfz );
+	  records.find(r)->second.write( &edfz , ch2slot );
 	  
 	  // next record
 	  r = timeline.next_record(r);
@@ -2188,14 +2305,24 @@ bool edf_t::write( const std::string & f , bool as_edfz , bool write_as_edf , bo
       //
       
       logger << "  writing EDFZ index to " << filename << ".idx\n";
-
+      
       // update record_size (e.g. if channels dropped)
       // at this point, we will have read all information in from
       // the existing 
+
       int new_record_size = 0;
 
-      for (int s=0;s<header.ns;s++)
-	new_record_size += 2 * header.n_samples[s] ; // 2 bytes each                                                       
+      // old
+      // for (int s=0;s<header.ns;s++)
+      // 	new_record_size += 2 * header.n_samples[s] ; // 2 bytes each                                                       
+      
+      // now allowing for dropped channels
+      for (int s2=0; s2<ns2; s2++)
+	{
+	  const int s = ch2slot[s2];
+	  new_record_size += 2 * header.n_samples[s] ; // 2 bytes each                                                       
+	}
+      
       edfz.write_index( new_record_size );
 
       
@@ -2301,6 +2428,7 @@ void edf_t::add_signal( const std::string & label ,
   const int ndata = data.size();
 
   // normally, n_samples is Fs * record length.
+
   // *however*, as we are currently otherwise enforcing that sample rate must be an integer 
   //   we've also added a backdoor for sedf_t creation here, to allow for
   //   has sample rate < 1 Hz and very long records (e.g. 30 seconds): namely,
@@ -2450,13 +2578,12 @@ void edf_record_t::add_annot( const std::string & str , const int signal )
   
   if ( signal < 0 || signal >= data.size() ) 
     Helper::halt( "internal error in add_annot()" );
-  
+
   // convert text to int16_t encoding
   data[ signal ].resize( str.size() );
   for (int s=0;s<str.size();s++) 
-    {
-      data[signal][s] = (char)str[s];
-    } 
+    data[signal][s] = (char)str[s];
+
 }
 
 // now redundant
@@ -3484,7 +3611,7 @@ bool edf_t::restructure()
       
   // set warning flags, if not enough data left
   
-  if ( records.size() == 0 ) globals::problem = true;
+  if ( records.size() == 0 ) globals::empty = true;
     
 
   logger << " keeping " 
@@ -3610,8 +3737,8 @@ void edf_t::shift( int s , int shift_sp , bool wrap )
 
 void edf_t::set_order( param_t & param )
 {
-
-  // do here
+  
+  
 
 }
 
@@ -3988,7 +4115,7 @@ void edf_t::set_edfplus()
   header.edfplus = true;
   header.continuous = true;    
   set_continuous(); // this sets reversed field EDF+C
-  add_continuous_time_track();
+  add_time_track();
 }
 
 void edf_t::set_edf()
@@ -4032,84 +4159,116 @@ void edf_t::drop_time_track()
 }
 
 
-int edf_t::add_continuous_time_track()
+int edf_t::add_time_track( const std::vector<uint64_t> * tps )
 {
   
-  // this can only add a time-track to a continuous record
-  // i.e. if discontinuous, it must already (by definition) 
-  // have a time track
+  // if tps == NULL, this implies a continuous record
+  //   - this will be the typical case -- i.e. if it is
+  //     an EDF+D/discontinuous, then (by definition) we will
+  //     have read in a time-track
 
-  if ( ! header.continuous ) 
-    return header.time_track();
+  // however, one exception to this is when merging standard EDFs
+  // to make a new EDF (--merge) and if there are gaps between files.
+  // here we need to set the EDF+D time-track explicitly- which is
+  // done by calling this function by having tps != NULL but a vector
+  // of time-points for each record
 
-  if ( ! header.edfplus ) set_edfplus();
-
-  // time-track already set?
-  if ( header.time_track() != -1 ) return header.time_track();
-
-  // update header
-  ++header.ns;
-
-  // set t_track channel
-  header.t_track  = header.ns - 1;
-  header.t_track_edf_offset = record_size; // i.e. at end of record
-
-  const int16_t dmax = 32767;
-  const int16_t dmin = -32768;
+  const bool contin = tps == NULL;
   
-  // need to set a record size -- this should be enough?
-  const int n_samples = globals::edf_timetrack_size;
+  if ( contin && ! header.continuous ) 
+    return header.time_track();
+  
+  if ( ! header.edfplus )
+    set_edfplus();
 
-  // how many existing 'EDF Annotations' tracks?
-  int annot_tracks = 0 ; 
+  
+  // time-track already set?
+  if ( contin && header.time_track() != -1 )
+    return header.time_track();  
+  
+  // check EDF+D time-track size, if specified
+  if ( ! contin )
+    if ( tps->size() != header.nr )
+      Helper::halt( "internal error: expecting " + Helper::int2str( header.nr )
+		    + " records but given time-track for " + Helper::int2str( (int)tps->size() ) );
 
-  std::map<std::string,int>::const_iterator jj = header.label_all.begin();
-  while ( jj != header.label_all.end() )
+
+  // add a new time-track?
+  
+  if ( header.time_track() == -1 ) 
     {
-      if ( Helper::imatch( jj->first  , "EDF Annotation" , 14 ) ) 
-	annot_tracks++;                     
-      ++jj;
+      
+      // update header
+      ++header.ns;
+      
+      // set t_track channel
+      header.t_track  = header.ns - 1;
+      header.t_track_edf_offset = record_size; // i.e. at end of record
+      
+      const int16_t dmax = 32767;
+      const int16_t dmin = -32768;
+      
+      // need to set a record size -- this should be enough?
+      // default (defs/defs.cpp) is currently 15 (i.e. 30 chars)
+      const int n_samples = globals::edf_timetrack_size;
+      
+      // how many existing 'EDF Annotations' tracks?
+      int annot_tracks = 0 ; 
+      
+      std::map<std::string,int>::const_iterator jj = header.label_all.begin();
+      while ( jj != header.label_all.end() )
+	{
+	  if ( Helper::imatch( jj->first  , "EDF Annotation" , 14 ) ) 
+	    annot_tracks++;                     
+	  ++jj;
+	}
+      
+      header.label.push_back( "EDF Annotations" + ( annot_tracks > 0 ? Helper::int2str( annot_tracks ) : "" ) );
+      header.annotation_channel.push_back( true );
+
+      // note: annot, so not added to header/record signal map label2header
+
+      header.transducer_type.push_back( "" );
+      header.phys_dimension.push_back( "" );
+      
+      header.physical_min.push_back( 0 ); // ignored
+      header.physical_max.push_back( 1 ); // ignored
+      header.digital_min.push_back( dmin );
+      header.digital_max.push_back( dmax );
+      
+      header.orig_physical_min.push_back( 0 ); // ignored
+      header.orig_physical_max.push_back( 1 ); // ignored
+      header.orig_digital_min.push_back( dmin );
+      header.orig_digital_max.push_back( dmax );
+      
+      header.prefiltering.push_back( "" );
+      header.n_samples.push_back( n_samples );
+      header.signal_reserved.push_back( "" );  
+      header.bitvalue.push_back( 1 ); // ignored
+      header.offset.push_back( 0 );   // ignored
     }
-
-  header.label.push_back( "EDF Annotations" + ( annot_tracks > 0 ? Helper::int2str( annot_tracks ) : "" ) );
-  header.annotation_channel.push_back( true );
-
-  // note: annot, so not added to header/record signal map label2header
-
-  header.transducer_type.push_back( "" );
-  header.phys_dimension.push_back( "" );
-
-  header.physical_min.push_back( 0 ); // ignored
-  header.physical_max.push_back( 1 ); // ignored
-  header.digital_min.push_back( dmin );
-  header.digital_max.push_back( dmax );
-
-  header.orig_physical_min.push_back( 0 ); // ignored
-  header.orig_physical_max.push_back( 1 ); // ignored
-  header.orig_digital_min.push_back( dmin );
-  header.orig_digital_max.push_back( dmax );
-
-  header.prefiltering.push_back( "" );
-  header.n_samples.push_back( n_samples );
-  header.signal_reserved.push_back( "" );  
-  header.bitvalue.push_back( 1 ); // ignored
-  header.offset.push_back( 0 );   // ignored
   
   // create each 'TAL' timestamp, and add to record
   double dur_sec = header.record_duration;
-  double onset = 0; // start at T=0
+  double onset = 0; // start at T=0 [ for EDF+C ], else uses tps[] below
 
-  uint64_t onset_tp = 0;
-  uint64_t dur_tp = header.record_duration_tp;
+  // uint64_t onset_tp = 0;
+  // uint64_t dur_tp = header.record_duration_tp;
 
   // for each record
   int r = timeline.first_record();
-  
+
+  // counter (EDF+D only, to index tps[]) 
+  int rc = 0;
+
   while ( r != -1 ) 
     {
 
-      std::string ts = "+" + Helper::dbl2str( onset ) + "\x14\x14\x00";
+      // either EDF+C or EDF+D times
+      double tsec = contin ? onset : ( (*tps)[rc] / (double)globals::tp_1sec ) ;
       
+      std::string ts = "+" + Helper::dbl2str( tsec ) + "\x14\x14\x00";
+
       // need to make sure that the record (i.e. other signals) 
       // are first loaded into memory...
       
@@ -4117,7 +4276,7 @@ int edf_t::add_continuous_time_track()
       
       if ( ! record_in_memory )
 	{
-
+	  
 	  // this will be created with ns+1 slots (i.e. 
 	  // already with space for the new timetrack, 
 	  // so we can add directly)
@@ -4134,19 +4293,35 @@ int edf_t::add_continuous_time_track()
       //
       // Add the time-stamp as the new track (i.e. if we write as EDF+)
       //
+
+      if ( contin )
+	{
       
-      if ( ! record_in_memory ) // record already 'updated'
-	records.find(r)->second.add_annot( ts , header.t_track );
-      else // push_back on end of record
-	records.find(r)->second.add_annot( ts );
+	  if ( ! record_in_memory ) // record structure already 'updated' from above
+	    records.find(r)->second.add_annot( ts , header.t_track );
+	  else // push_back on end of record
+	    records.find(r)->second.add_annot( ts );
+	}
+      else
+	{
+	  // different logic for the EDF+D / --merge case
+
+	  // here, we are adding a EDF+D time-track (from --merge)
+	  // there will already be a time-track
+	  records.find(r)->second.add_annot( ts , header.t_track );
+	  
+	}
       
       //
       // And mark the actual record directy (i.e. if this is used in memory)
-      //
+      // for EDF+C  (if EDF+D, this does not matter)
       
       onset += dur_sec;
-      onset_tp += dur_tp;
-     
+      //onset_tp += dur_tp;
+      
+      // next record [ used for EDF+D ]
+      ++rc;
+      
       r = timeline.next_record(r);
     }
 
@@ -4159,6 +4334,7 @@ int edf_t::add_continuous_time_track()
 }
 
 
+
 uint64_t edf_t::timepoint_from_EDF( int r )
 {
 
@@ -4168,7 +4344,7 @@ uint64_t edf_t::timepoint_from_EDF( int r )
 
   if ( file == NULL )
     return edfz->get_tindex( r );
-  
+
   //
   // Read this is called when constructing a time-series for 
   // an existing EDF+D, only
@@ -4195,6 +4371,7 @@ uint64_t edf_t::timepoint_from_EDF( int r )
   size_t rdsz = fread( p , 1, ttsize , file );
   
   std::string tt( ttsize , '\x00' );
+
   int e = 0;
   for (int j=0; j < ttsize; j++)
     {      
@@ -4205,7 +4382,7 @@ uint64_t edf_t::timepoint_from_EDF( int r )
     }
   
   double tt_sec = 0;
-  
+
   if ( ! Helper::str2dbl( tt.substr(0,e) , &tt_sec ) ) 
     Helper::halt( "problem converting time-track in EDF+" );
   
@@ -4398,6 +4575,10 @@ bool edf_t::basic_stats( param_t & param )
   bool calc_median = true;
   
   int required_sr = param.has( "sr-under" ) ? param.requires_int( "sr-under" ) : 0 ; 
+
+  const bool minimal = param.has( "min" ) || param.has( "minimal" );
+
+  const bool run_pcts = param.has( "pct" ) ? param.yesno("pct") : true ;
   
   for (int s=0; s<ns; s++)
     {
@@ -4405,7 +4586,7 @@ bool edf_t::basic_stats( param_t & param )
       //
       // skip annotation channels
       //
-
+      
       if ( header.is_annotation_channel( signals(s) ) ) continue;
 
       //
@@ -4414,6 +4595,7 @@ bool edf_t::basic_stats( param_t & param )
 
       if ( required_sr != 0 && header.sampling_freq( signals(s) ) > required_sr ) continue;
 
+      if ( header.sampling_freq( signals(s) ) == 0 ) continue;
 	   
       //
       // Output signal
@@ -4473,32 +4655,35 @@ bool edf_t::basic_stats( param_t & param )
 	      
 	      double mean   = MiscMath::mean( *d );
 	      double median = calc_median ? MiscMath::median( *d ) : 0;
-	      double sd     = MiscMath::sdev( *d , mean );
-	      double rms    = MiscMath::rms( *d );
-	      double skew   = MiscMath::skewness( *d , mean , sd );
-	      double kurt   = MiscMath::kurtosis( *d , mean );
+	      
+	      double sd     = minimal ? 0 : MiscMath::sdev( *d , mean );
+	      double rms    = minimal ? 0 : MiscMath::rms( *d );
+	      double skew   = minimal ? 0 : MiscMath::skewness( *d , mean , sd );
+	      double kurt   = minimal ? 0 : MiscMath::kurtosis( *d , mean );
 	      
 	      double min = (*d)[0];
 	      double max = (*d)[0];
+	      if ( ! minimal ) 
+		for (int i = 0 ; i < n ; i++ )
+		  {
+		    if ( (*d)[i] < min ) min = (*d)[i];
+		    if ( (*d)[i] > max ) max = (*d)[i];
+		  }
 	      
-	      for (int i = 0 ; i < n ; i++ )
-		{
-		  if ( (*d)[i] < min ) min = (*d)[i];
-		  if ( (*d)[i] > max ) max = (*d)[i];
-		}
-	    	      
 	      std::map<int,double> pct;
-	      //pct[ -1 ]  = MiscMath::percentile( *d , 0.001 );
-	      pct[ 1 ]  = MiscMath::percentile( *d , 0.01 );
-	      pct[ 2 ]  = MiscMath::percentile( *d , 0.02 );
-	      pct[ 5 ]  = MiscMath::percentile( *d , 0.05 );
-	      pct[ 95 ] = MiscMath::percentile( *d , 0.95 );
-	      pct[ 98 ] = MiscMath::percentile( *d , 0.98 );
-	      pct[ 99 ] = MiscMath::percentile( *d , 0.99 );
-	      //pct[ 999 ]  = MiscMath::percentile( *d , 0.999 );
-	      for (int pp=0;pp<9;pp++)
-		pct[ 10 + pp * 10 ] = MiscMath::percentile( *d , 0.1 + pp*0.1 );
-	      
+	      if ( run_pcts )
+		{
+		  //pct[ -1 ]  = MiscMath::percentile( *d , 0.001 );
+		  pct[ 1 ]  = MiscMath::percentile( *d , 0.01 );
+		  pct[ 2 ]  = MiscMath::percentile( *d , 0.02 );
+		  pct[ 5 ]  = MiscMath::percentile( *d , 0.05 );
+		  pct[ 95 ] = MiscMath::percentile( *d , 0.95 );
+		  pct[ 98 ] = MiscMath::percentile( *d , 0.98 );
+		  pct[ 99 ] = MiscMath::percentile( *d , 0.99 );
+		  //pct[ 999 ]  = MiscMath::percentile( *d , 0.999 );
+		  for (int pp=0;pp<9;pp++)
+		    pct[ 10 + pp * 10 ] = MiscMath::percentile( *d , 0.1 + pp*0.1 );
+		}
 	      
 	      //
 	      // Output
@@ -4506,53 +4691,64 @@ bool edf_t::basic_stats( param_t & param )
 	      
 	      writer.epoch( timeline.display_epoch( epoch ) );
 	      
-	      writer.value( "MAX"  , max  );
-	      writer.value( "MIN"  , min  );	      
 	      writer.value( "MEAN" , mean );
-
-	      if ( Helper::realnum( skew ) )
-		writer.value( "SKEW" , skew );
-
-	      if ( Helper::realnum( kurt ) )
-		writer.value( "KURT" , kurt );
 
 	      if ( calc_median ) 
 		writer.value( "MEDIAN" , median );	      
 
-	      writer.value( "RMS"  , rms  );
-
-	      std::map<int,double>::const_iterator pp = pct.begin() ;
-	      while ( pp != pct.end() )
+	      if ( ! minimal )
 		{
-		  if ( pp->first == -1 )
-		    writer.value( ( "P001" ) + Helper::int2str( pp->first ) , pp->second ) ;
-		  else		    
-		    writer.value( ( pp->first < 10 ? "P0" : "P" ) + Helper::int2str( pp->first ) , pp->second ) ;
-		  ++pp;
+		  writer.value( "MAX"  , max  );
+		  writer.value( "MIN"  , min  );	      
+		  
+		  if ( Helper::realnum( skew ) )
+		    writer.value( "SKEW" , skew );
+		  
+		  if ( Helper::realnum( kurt ) )
+		    writer.value( "KURT" , kurt );
+		  
+		  writer.value( "RMS"  , rms  );
+
+		  if ( run_pcts )
+		    {
+		      std::map<int,double>::const_iterator pp = pct.begin() ;
+		      while ( pp != pct.end() )
+			{
+			  if ( pp->first == -1 )
+			    writer.value( ( "P001" ) + Helper::int2str( pp->first ) , pp->second ) ;
+			  else		    
+			    writer.value( ( pp->first < 10 ? "P0" : "P" ) + Helper::int2str( pp->first ) , pp->second ) ;
+			  ++pp;
+			}
+		    }
 		}
-
-
+	      
 	      
 	      //
 	      // Record
 	      //
 	      
-	      if ( t_min == 0 && t_max == 0 ) 
-		{ 
-		  t_min = min; 
-		  t_max = max; 
-		} 
-	      
-	      if ( min < t_min ) t_min = min;
-	      if ( max > t_max ) t_max = max;
-	      
 	      e_mean.push_back( mean );
+
 	      if ( calc_median ) 
 		e_median.push_back( median );
-	      e_sd.push_back( sd );
-	      e_rms.push_back( rms );	  
-	      e_skew.push_back( skew );
-	      e_kurt.push_back( kurt );
+
+	      if ( ! minimal )
+		{
+		  if ( t_min == 0 && t_max == 0 ) 
+		    { 
+		      t_min = min; 
+		      t_max = max; 
+		    } 
+		  
+		  if ( min < t_min ) t_min = min;
+		  if ( max > t_max ) t_max = max;
+		  
+		  e_sd.push_back( sd );
+		  e_rms.push_back( rms );	  
+		  e_skew.push_back( skew );
+		  e_kurt.push_back( kurt );
+		}
 	    }
 	  
 	  writer.unepoch();
@@ -4577,51 +4773,62 @@ bool edf_t::basic_stats( param_t & param )
  
       double mean = MiscMath::mean( *d );
       //double median = calc_median ? MiscMath::median( *d ) : 0 ;
-      double rms  = MiscMath::rms( *d );
-      double sd = MiscMath::sdev( *d );
-      double skew = MiscMath::skewness( *d , mean , sd );
-      double kurt = MiscMath::kurtosis( *d , mean );
-      double min = (*d)[0];
-      double max = (*d)[0];
 
-      
-      for (int i = 0 ; i < n ; i++ )
-	{
-	  if ( (*d)[i] < min ) min = (*d)[i];
-	  if ( (*d)[i] > max ) max = (*d)[i];
-	}
-      
-      std::map<int,double> pct;
-      pct[ 1 ]  = MiscMath::percentile( *d , 0.01 );
-      pct[ 2 ]  = MiscMath::percentile( *d , 0.02 );
-      pct[ 5 ]  = MiscMath::percentile( *d , 0.05 );
-      pct[ 95 ] = MiscMath::percentile( *d , 0.95 );
-      pct[ 98 ] = MiscMath::percentile( *d , 0.98 );
-      pct[ 99 ] = MiscMath::percentile( *d , 0.99 );
-      for (int pp=0;pp<9;pp++)
-	pct[ 10 + pp * 10 ] = MiscMath::percentile( *d , 0.1 + pp*0.1 );
-
-      //
-      // Output
-      //
-	  
-
-      writer.value( "MAX"  , max  );
-      writer.value( "MIN"  , min  );      
       writer.value( "MEAN" , mean );
-      writer.value( "SKEW" , skew );
-      writer.value( "KURT" , kurt );
       
-      //if ( calc_median ) writer.value( "MEDIAN" , median );
-
-      writer.value( "RMS"  , rms  );
-      writer.value( "SD"  , sd  );
-
-      std::map<int,double>::const_iterator pp = pct.begin() ;
-      while ( pp != pct.end() ) 
+      if ( ! minimal )
 	{
-	  writer.value( ( pp->first < 10 ? "P0" : "P" ) + Helper::int2str( pp->first ) , pp->second ) ;
-	  ++pp;
+	  double rms  = MiscMath::rms( *d );
+	  double sd = MiscMath::sdev( *d );
+	  double skew = MiscMath::skewness( *d , mean , sd );
+	  double kurt = MiscMath::kurtosis( *d , mean );
+	  double min = (*d)[0];
+	  double max = (*d)[0];
+
+      
+	  for (int i = 0 ; i < n ; i++ )
+	    {
+	      if ( (*d)[i] < min ) min = (*d)[i];
+	      if ( (*d)[i] > max ) max = (*d)[i];
+	    }
+
+
+	  std::map<int,double> pct;
+	  if ( run_pcts )
+	    {	      
+	      pct[ 1 ]  = MiscMath::percentile( *d , 0.01 );
+	      pct[ 2 ]  = MiscMath::percentile( *d , 0.02 );
+	      pct[ 5 ]  = MiscMath::percentile( *d , 0.05 );
+	      pct[ 95 ] = MiscMath::percentile( *d , 0.95 );
+	      pct[ 98 ] = MiscMath::percentile( *d , 0.98 );
+	      pct[ 99 ] = MiscMath::percentile( *d , 0.99 );
+	      for (int pp=0;pp<9;pp++)
+		pct[ 10 + pp * 10 ] = MiscMath::percentile( *d , 0.1 + pp*0.1 );
+	    }
+	  
+	  //
+	  // Output
+	  //
+	  	  
+	  writer.value( "MAX"  , max  );
+	  writer.value( "MIN"  , min  );      	  
+	  writer.value( "SKEW" , skew );
+	  writer.value( "KURT" , kurt );
+	  
+	  //if ( calc_median ) writer.value( "MEDIAN" , median );
+	  
+	  writer.value( "RMS"  , rms  );
+	  writer.value( "SD"  , sd  );
+
+	  if ( run_pcts )
+	    {
+	      std::map<int,double>::const_iterator pp = pct.begin() ;
+	      while ( pp != pct.end() ) 
+		{
+		  writer.value( ( pp->first < 10 ? "P0" : "P" ) + Helper::int2str( pp->first ) , pp->second ) ;
+		  ++pp;
+		}
+	    }
 	}
       
       //
@@ -4633,23 +4840,27 @@ bool edf_t::basic_stats( param_t & param )
 	  const int ne = e_mean.size(); 
 	  double med_mean  = median_destroy( &e_mean[0] , ne );
 	  double med_median  = calc_median ? median_destroy( &e_median[0] , ne ) : 0 ;  
-	  double med_rms  = median_destroy( &e_rms[0] , ne );
-	  double med_skew = median_destroy( &e_skew[0] , ne );
-	  double med_kurt = median_destroy( &e_kurt[0] , ne );
-	  
-	  writer.value( "NE" , timeline.num_total_epochs() );	  
-	  writer.value( "NE1" , ne );
-
 	  writer.value( "MEDIAN.MEAN" , med_mean );
 	  if ( calc_median )
 	    writer.value( "MEDIAN.MEDIAN" , med_median );
-	  writer.value( "MEDIAN.RMS"  , med_rms );
-	  writer.value( "MEDIAN.SKEW" , med_skew );
-	  writer.value( "MEDIAN.KURT" , med_kurt );
+
+	  writer.value( "NE" , timeline.num_total_epochs() );	  
+	  writer.value( "NE1" , ne );
+	  
+	  if ( ! minimal )
+	    {
+	  
+	      double med_rms  = median_destroy( &e_rms[0] , ne );
+	      double med_skew = median_destroy( &e_skew[0] , ne );
+	      double med_kurt = median_destroy( &e_kurt[0] , ne );
+	      
+	      writer.value( "MEDIAN.RMS"  , med_rms );
+	      writer.value( "MEDIAN.SKEW" , med_skew );
+	      writer.value( "MEDIAN.KURT" , med_kurt );
+	    }
 	}
 
-
-
+      
       //
       // Optional, encoding 
       //
@@ -4806,35 +5017,57 @@ bool edf_t::append( const std::string & filename ,
   //  base.header.nr      # of records (will be increased)
   //  base.header.recdur  # irrelevant
 
-  //  base.header.label[i]       hannel label, should match EXACTLY data[r].first
+  //  base.header.label[i]       channel label, should match EXACTLY data[r].first
   //  base.header.n_samples[i]   # samples per reccord for signal i, should match data[r][s].size() 
-
+  
   const int n_new_records = data.size();
 
   //
-  // Check all channels exist, and have correct n_samples[]
-  //
+  // Check all original channels exist, and have correct n_samples[]
+  //  - allow for different order
+  //  - ignore channels in new data but not present in the original
+  
+  std::map<std::string,int> ch2slot;
+  for (int s=0; s<channels.size(); s++)
+    ch2slot[ channels[s] ] = s;
 
-  if ( base.header.ns != channels.size() )
-    Helper::halt( "must have exactly same set of channels to append to an EDF" );
+  // consider each original channel - all must be present in the new 
+  // data -- but now the order and # does not otherwise have to align
+  // we will use ch2ch[] below to select the correct channel from the new 
+  // data 
   
+  std::vector<int> ch2ch( base.header.ns );
   for (int s=0; s<base.header.ns; s++)
-    if ( channels[s] != base.header.label[s] )
-      Helper::halt( "must have exactly the same order of channels to append to an EDF" );
+    {
+      if ( ch2slot.find( base.header.label[s] ) == ch2slot.end() )
+	Helper::halt( "could not find " + base.header.label[s] + " in the to-be-appended data" );
+      ch2ch[s] = ch2slot[ base.header.label[s] ];
+    }
   
+  // if ( base.header.ns != channels.size() )
+  //   Helper::halt( "must have exactly same set of channels to append to an EDF" );
+  
+  // for (int s=0; s<base.header.ns; s++)
+  //   if ( channels[s] != base.header.label[s] )
+  //     Helper::halt( "must have exactly the same order of channels to append to an EDF" );
+  
+
+
   //
   // Just check first record, but **assume** all records have the same length (will be checked when writing)
   //
-
-  if ( data[0].size() != base.header.ns )
-    Helper::halt( "data[] must exactly match EDF # of channels" );
-
+  
+  // not required any more: allowing more channels in new data (which will be ignored)
+  // if ( data[0].size() != base.header.ns )
+  //   Helper::halt( "data[] must exactly match EDF # of channels" );
+  
+  // nb ch2ch[] mapping from original to new slots
   for (int s=0; s < base.header.ns; s++)
-    if ( data[0][s].size() != base.header.n_samples[s] )
+    if ( data[0][ ch2ch[s] ].size() != base.header.n_samples[s] )
       Helper::halt( "data[] must have exactly the same # of samples per record to append" );
-
+  
   //
-  // Store key values
+  // Store key values : these necessarily match the original/base
   //
 
   const int orig_nr = base.header.nr;
@@ -4890,7 +5123,7 @@ bool edf_t::append( const std::string & filename ,
       bv[s] = ( orig_physical_max[s] - orig_physical_min[s] ) / (double)( orig_digital_max[s] - orig_digital_min[s] );
       os[s] = ( orig_physical_max[s] / bv[s] ) - orig_digital_max[s];
     }
-
+  
   //
   // Iterate over records
   //
@@ -4904,10 +5137,14 @@ bool edf_t::append( const std::string & filename ,
 
 	  const int nsamples = orig_nsamples[s];
 
-	  const std::vector<double> & d = data[r][s];
+	  // nb. select the correct slot from the new data using ch2ch[]
+	  // otherwise, below use s rather than ch2ch[s] as we are 
+	  // placing into slot s
+	  const std::vector<double> & d = data[r][ ch2ch[s] ];
 	  
-	  if ( d.size() != nsamples ) Helper::halt( "hmm... internal error in append()" );
-
+	  if ( d.size() != nsamples ) 
+	    Helper::halt( "hmm... internal error in append()" );
+	  
 	  const double pmin = orig_physical_min[s] ;
 	  const double pmax = orig_physical_max[s] ;
 	  
@@ -5068,3 +5305,32 @@ void edf_t::set_headers( param_t & param )
   
 }
 
+// int edf_t::read_all()
+// {
+  
+//   for (int r = 0 ; r < header.nr_all; r++)
+//     {	
+//       bool found     = records.find(r) != records.end();
+//       bool retained  = timeline.retained(r);
+//       bool unmasked  = !timeline.masked_record(r);
+      
+//       if ( retained )
+// 	if ( unmasked ) 
+// 	  if ( ! found )
+// 	    {
+// 	      read_records( r, r );
+// 		++rex;
+// 	    }
+//     }
+//   return rex;
+// }
+
+
+void edf_t::update_edf_pointers( edf_t * p )
+{
+  for (int r = 0 ; r < header.nr_all; r++)
+    {
+      bool found = records.find(r) != records.end();
+      records.find(r)->second.edf = p; 
+    }
+}

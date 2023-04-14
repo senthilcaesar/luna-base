@@ -34,6 +34,8 @@
 extern writer_t writer;
 extern logger_t logger; 
 
+#include "stats/Eigen/Dense"
+#include "stats/eigen_ops.h"
 
 void mtm::wrapper( edf_t & edf , param_t & param )
 {
@@ -69,6 +71,16 @@ void mtm::wrapper( edf_t & edf , param_t & param )
     Helper::halt( "cannot specify both mean-center and detrend" );
   
   //
+  // create new signals?
+  // prefix_CH_N ... where N = 1,2,3, that correspond to Fs in range
+  //
+  
+  const bool new_sigs = param.has( "add" ) ;
+  
+  std::string new_sig_prefix = new_sigs ? param.value( "add" ) : "" ; 
+
+  
+  //
   // MTM parameters (tw or nw)
   //
   
@@ -85,9 +97,18 @@ void mtm::wrapper( edf_t & edf , param_t & param )
   int min_sr = param.has( "sr" ) ? param.requires_int( "sr" ) : 0 ; 
 
   //
-  // Reporting full spectrum? (default 0.5 to 25 Hz)
+  // Start/stop times?
   //
 
+  const bool   restrict_start = param.has( "start" );
+  const bool   restrict_stop = param.has( "stop" );
+  const double restrict_start_sec = param.has( "start" ) ? param.requires_dbl( "start" ) : 0 ;
+  const double restrict_stop_sec = param.has( "stop" ) ? param.requires_dbl( "stop" ) : 0 ;
+  
+  //
+  // Reporting full spectrum? (default 0.5 to 25 Hz)
+  //
+  
   double min_f = param.has( "min" ) ? param.requires_dbl( "min" ) : 0.5; 
   double max_f = param.has( "max" ) ? param.requires_dbl( "max" ) : 25;  
 
@@ -159,15 +180,81 @@ void mtm::wrapper( edf_t & edf , param_t & param )
       
       slice_t slice( edf , signals(s) , interval );
       
-      const std::vector<double> * d = slice.pdata();	   
+      const std::vector<double> * d = slice.pdata();
 
+      
       //
       // Step size in sample-points
       //
       
       const int segment_size = Fs[s] * segment_size_sec;
       const int segment_step = Fs[s] * segment_step_sec;
+      const uint64_t delta_tp = globals::tp_1sec / Fs[s] ;
+
+      //
+      // Get time points (and flags for segments that span discontinuities)
+      //  - also, indicate whether all should be computed (at segment/eppch level)
+      //  - this is for moonlight MTM interactive viewer mainly
       
+      const std::vector<uint64_t> * tp = slice.ptimepoints();	   
+      const int np = tp->size();
+      
+      std::vector<double> start, stop;
+      std::vector<int> start_sp, stop_sp; // original signal encoding
+      
+      // when 'add' option, count number of segments spanning this sample point
+      std::vector<int> addn( np , 0 ); 
+
+      // get 
+      int nf = -1;
+      Eigen::MatrixXd addX;
+
+      std::vector<bool> disc, restrict;
+      
+      int p = 0;
+      int nn = 0;
+      int actual = 0;
+
+      // actual segment size (may differ from requested due to sample rates)
+      // here, check against this)
+      const double segment_sec2 = segment_size / (double)Fs[s];
+
+      while ( 1 ) {
+	if ( p + segment_size > np ) break;
+	
+	double start_sec = (*tp)[p] * globals::tp_duration;
+	double stop_sec = ( (*tp)[ p + segment_size - 1 ] + delta_tp ) * globals::tp_duration; // '1past'
+	double implied_sec = stop_sec - start_sec;
+	
+	start_sp.push_back( p );
+	stop_sp.push_back( p + segment_size - 1 ) ; // 'last point in seg'
+	start.push_back( start_sec );
+	stop.push_back( stop_sec );
+	disc.push_back( fabs( implied_sec - segment_sec2 ) > 0.0001 );
+
+	bool okay = true;
+	if ( restrict_start && start_sec < restrict_start_sec ) okay = false;
+	if ( restrict_stop && stop_sec > restrict_stop_sec ) okay = false;
+	restrict.push_back( ! okay );
+	if ( okay ) ++actual;
+	++nn;
+	// std::cout << "seg " << nn << "\t" << p << "\t" << start_sec << "\t" << stop_sec << "\t"
+	// 	  << " sz " << implied_sec << " " << segment_sec2 << " " 
+	// 	  << ( fabs( implied_sec - segment_sec2 ) > 0.001 )
+	//   	  << "\trestrict=" << ! okay << "\n";
+	
+	// next segment
+	p += segment_step;
+	
+      }
+
+
+      if ( actual == 0 )
+	{
+	  logger << "  *** no segments to process, leaving MTM...\n";
+	  return;
+	}
+
       //
       // call MTM
       //
@@ -177,12 +264,29 @@ void mtm::wrapper( edf_t & edf , param_t & param )
       mtm.dB = dB;
       mtm.opt_remove_mean = mean_center;
       mtm.opt_remove_trend = remove_linear_trend;
-      
+
+      if ( restrict_start || restrict_stop )
+	mtm.restrict = restrict;
+	  
       // s==0 means only give verbose output on first channel
       mtm.apply( d , Fs[s] , segment_size , segment_step , s == 0 );
       
       if ( s == 0 ) logger << "  processed channel(s):";
       logger << " " << signals.label(s) ;
+      
+
+      //
+      // count freq bins if not already done? could add only areduced set perhaps?
+      //
+
+      if ( new_sigs && nf == -1 ) 
+	{	  
+	  nf = 0;
+	  for ( int i = 0 ; i < mtm.f.size() ; i++ )
+	    if ( mtm.f[i] >= min_f && mtm.f[i] <= max_f )
+	      ++nf;
+	  addX = Eigen::MatrixXd::Zero( np , nf );	  
+	}
       
       //
       // Output: tapers?
@@ -256,28 +360,71 @@ void mtm::wrapper( edf_t & edf , param_t & param )
       // i.e. not using epoch encoding etc
       //
 
-      // store spectral slope per epoch for this channel?                                                                                                               
+      // store spectral slope per epoch for this channel?
+                   
       std::vector<double> slopes;
       
-      if ( epoch_level_output || spectral_slope )
+      if ( epoch_level_output || spectral_slope || new_sigs )
 	{
 	  const int nsegs = mtm.espec.size();
+
+	  if ( nsegs != start.size() )
+	    Helper::halt( "internal error in MTM timing:" + Helper::int2str( nsegs ) + " vs " + Helper::int2str( (int)start.size() ) );
 	  
-	  if ( epoch_level_output ) 
+	  if ( epoch_level_output || new_sigs ) 
 	    {
 	      for ( int j = 0 ; j < nsegs ; j++)
 		{
-		  writer.level( j+1 , "SEG" );	  
 		  
-		  for ( int i = 0 ; i < mtm.f.size() ; i++ ) 
+		  if ( ! restrict[j] ) 
 		    {
-		      if ( mtm.f[i] >= min_f && mtm.f[i] <= max_f ) 
+		      
+		      //
+		      // add main output
+		      //
+		      
+		      if ( epoch_level_output ) 
 			{
-			  writer.level( mtm.f[i] , globals::freq_strat  );
-			  writer.value( "MTM" , mtm.espec[j][i] );
+			  writer.level( j+1 , "SEG" );	  
+			  writer.value( "START" , start[j] );
+			  writer.value( "STOP" , stop[j] );
+			  writer.value( "DISC" , (int)disc[j] );
+			  
+			  for ( int i = 0 ; i < mtm.f.size() ; i++ ) 
+			    {
+			      if ( mtm.f[i] >= min_f && mtm.f[i] <= max_f ) 
+				{
+				  writer.level( mtm.f[i] , globals::freq_strat  );
+				  writer.value( "MTM" , mtm.espec[j][i] );
+				}
+			    }
+			  writer.unlevel( globals::freq_strat );	      
+			}
+		      
+		      //
+		      // make new signals?		      
+		      //
+		      
+		      if ( new_sigs ) 
+			{
+			  int s1 = start_sp[j];
+			  int s2 = stop_sp[j];
+			  //std::cout << " s1 s2 = " << s1 << " .. " << s2 << "\n";
+			  for (int p=s1; p<=s2; p++)
+			    {
+			      addn[p]++;
+			      
+			      int fidx = 0;
+			      for ( int i = 0 ; i < mtm.f.size() ; i++ )
+				if ( mtm.f[i] >= min_f && mtm.f[i] <= max_f )
+				  {
+				    addX(p,fidx++) += mtm.espec[j][i];
+				    //std::cout << " adding seg << " << j << " sample " << p << " freq " << fidx-1 <<"=" << mtm.f[i] << " = " << mtm.espec[j][i] << "\n";
+				  }
+			    }
+			  
 			}
 		    }
-		  writer.unlevel( globals::freq_strat );	      
 		}
 	    }
 	  
@@ -288,26 +435,29 @@ void mtm::wrapper( edf_t & edf , param_t & param )
 	      
 	      for ( int j = 0 ; j < nsegs ; j++)
 		{
-		  double es1 = 0 ;
-		  
-		  bool okay = spectral_slope_helper( mtm.raw_espec[j] , 
-						     mtm.f ,						     
-						     slope_range ,
-						     slope_outlier ,
-						     spectral_slope_show_epoch ,
-						     &es1 );
-		  
-		  if ( okay ) slopes.push_back( es1 );
+
+		  if ( ! restrict[j] )
+		    {
+		      double es1 = 0 ;
+		      
+		      bool okay = spectral_slope_helper( mtm.raw_espec[j] , 
+							 mtm.f ,						     
+							 slope_range ,
+							 slope_outlier ,
+							 spectral_slope_show_epoch ,
+							 &es1 );
+		      
+		      if ( okay ) slopes.push_back( es1 );
+		    }
 		}
 	    }
-	  
 	  
 	}
       
       if ( epoch_level_output ) 
 	writer.unlevel( "SEG" );
       
-      
+    
 
       //
       // spectral slope based on distribution of epoch-level slopes?
@@ -327,6 +477,36 @@ void mtm::wrapper( edf_t & edf , param_t & param )
 	    }
 	}
 
+      
+      //
+      // add new signals?
+      //
+
+      if ( new_sigs )
+	{
+
+	  int fidx = 0;
+	  for ( int i = 0 ; i < mtm.f.size() ; i++ )
+	    if ( mtm.f[i] >= min_f && mtm.f[i] <= max_f )
+	      {
+		
+		const std::string new_sig_label = new_sig_prefix + "_" + signals.label(s) + "_" + Helper::int2str( fidx + 1 );
+		
+		std::vector<double> dat = eigen_ops::copy_array( addX.col( fidx ) );
+		
+		// normalize
+		for (int p=0; p<np; p++) dat[p] /= (double)addn[p];
+		
+		if ( dat.size() != np ) Helper::halt( "internal error in MTM 'add'" );
+		
+		logger << "  adding new signal " << new_sig_label << " ( MTM @ " << mtm.f[i] << " Hz )\n";
+		
+		edf.add_signal( new_sig_label , Fs[s] , dat );
+		
+		++fidx;
+	      }
+	}
+      
       
     } // next signal
 

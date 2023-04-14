@@ -39,6 +39,8 @@ extern writer_t writer;
 
 extern logger_t logger;
 
+sleep_stage_t hypnogram_t::gap_treatment = UNKNOWN;
+
 
 bool is_rem( sleep_stage_t s ) { return s == REM; } 
 bool is_nrem( sleep_stage_t s ) { return s == NREM1 || s == NREM2 || s == NREM3 || s == NREM4; } 
@@ -47,10 +49,12 @@ bool is_nrem2( sleep_stage_t s ) { return s == NREM2; }
 bool is_nrem23( sleep_stage_t s ) { return s == NREM2 || s == NREM3; } 
 bool is_nrem34( sleep_stage_t s ) { return s == NREM3 || s == NREM4; } 
 bool is_nrem234( sleep_stage_t s ) { return s == NREM2 || s == NREM3 || s == NREM4; } 
-bool is_wake( sleep_stage_t s ) { return s == WAKE; }
-bool is_wake_or_lights( sleep_stage_t s ) { return s == WAKE || s == LIGHTS_ON; } 
+bool is_wake( sleep_stage_t s ) { return s == WAKE || ( s == GAP && hypnogram_t::gap_treatment == WAKE ) ; }
+bool is_wake_or_lights( sleep_stage_t s ) { return is_wake(s) || s == LIGHTS_ON; } 
 bool is_sleep( sleep_stage_t s ) { return s == NREM1 || s == NREM2 || s == NREM3 || s == NREM4 || s == REM ; } 
-bool is_absent( sleep_stage_t s ) { return s == UNSCORED || s == UNKNOWN || s == MOVEMENT || s == LIGHTS_ON || s == ARTIFACT ; } 
+bool is_absent( sleep_stage_t s ) { return s == UNSCORED || s == UNKNOWN || s == MOVEMENT || s == LIGHTS_ON || s == ARTIFACT || ( s == GAP && hypnogram_t::gap_treatment == UNKNOWN ); } 
+bool is_gap( sleep_stage_t s ) { return s == GAP; }
+bool is_obersved( sleep_stage_t s ) { return s != GAP; }
 
 bool is_same_3class( sleep_stage_t s1 , sleep_stage_t s2 ) 
 { 
@@ -144,6 +148,8 @@ bool hypnogram_t::construct( timeline_t * t , param_t & param , const bool verbo
   
 
   // in VERBOSE (HYPNO) mode, we require the FULL epoch set
+  //  -- although, note that we are adding support for HYPNO in EDF+D conttexts
+  //     and so this is no different... 
   
   if ( verbose ) 
     {
@@ -162,30 +168,82 @@ bool hypnogram_t::construct( timeline_t * t , param_t & param , const bool verbo
 	}
     }
 
-  const int ne = timeline->num_total_epochs();
+  // this is number of observed epochs
+  ne = timeline->num_total_epochs();
   
   timeline->first_epoch();
-
+  
+  // key measures populated here
   stages.clear();
   epoch_n.clear();
+  // explicitly track length and start of each epoch
+  //  (to allow for gaps)
+  epoch_dur.clear();
+  epoch_start.clear();
+  epoch_gap.clear();
+
+  // how ot handle gaps -- treat as "WAKE" or just as unknown?
+  gap_treatment = param.has( "gaps" ) && param.value( "gaps" ) == "W" ? WAKE : UNKNOWN; 
+  
+  //
+  // canonical epoch sizes (for observed epochs, not gaps)
+  //
+  
+  epoch_mins = timeline->epoch_length() / 60.0 ; 
+  epoch_hrs = epoch_mins / 60.0;
+  epoch_sec = timeline->epoch_length();
 
   //
   // We should be able to use current 0..ne epoch naming as epoch-annotations
   // still work after a restructure
   //
-
+  
   n_conflicts = 0;
 
+  uint64_t end_prior = 0;
+  
   while ( 1 ) 
     {
-
+      
       int e = timeline->next_epoch();
-    
+
+      if ( e == -1 ) break;
+      
       writer.epoch( timeline->display_epoch( e ) );
       
-      if ( e == -1 ) break;
+      //
+      // was there a gap prior to this epoch?
+      //  - if contiguous, end of last == start of current
+      //
+      
+      interval_t interval = timeline->epoch( e );
+      
+      if ( end_prior != 0 && end_prior != interval.start )
+	{
 
-      // for output of STAGES or HYPNO, use original EDF annotations though
+	  //std::cout << " found gap before epoch " << e << "\n";
+	  uint64_t gap_dur = interval.start - end_prior;
+	  
+	  // add a fake 'gap' epoch
+	  // before this real one
+	  stages.push_back( GAP );
+	  epoch_gap.push_back( true );
+	  epoch_start.push_back( interval.start_sec() );
+	  epoch_dur.push_back( gap_dur * globals::tp_duration );
+	  epoch_n.push_back( -1 );     // not used i.e. lookup to display epoch code 
+	}
+
+      //
+      // update last prior stop point for the next epoch
+      //
+
+      end_prior = interval.stop; 
+      
+
+      //
+      // for output of STAGES or HYPNO, use original EDF annotations
+      //
+
       int e2 = timeline->original_epoch(e) ;
       
       bool wake = timeline->epoch_annotation( "W"  , e );
@@ -235,6 +293,11 @@ bool hypnogram_t::construct( timeline_t * t , param_t & param , const bool verbo
       // store original EDF 0-based encoding, to be passed to calc_stats()
       epoch_n.push_back( e2 );
       
+      epoch_gap.push_back( false ); // is not a gap      
+      epoch_start.push_back( interval.start_sec() ); // start of epoch in seconds (elapsed from EDF start) 
+      epoch_dur.push_back( epoch_sec );              // epoch duration will be fixed for non-gaps
+      
+      // track times for basic epochs
     }
 
   writer.unepoch();
@@ -245,6 +308,14 @@ bool hypnogram_t::construct( timeline_t * t , param_t & param , const bool verbo
   //
   
   original_stages = stages;
+
+  //
+  // track total number of epochs + gaps
+  //
+
+  ne_gaps = stages.size();
+
+  
   
   //
   // edit hypnogram as needed (e.g. for lights-off, excessive WASO, etc)
@@ -252,23 +323,24 @@ bool hypnogram_t::construct( timeline_t * t , param_t & param , const bool verbo
   
   edit( timeline , param ); 
   
+
   //
   // Report any conflicts
   //
-
+  
   if ( n_conflicts )
     logger << "  *** found " << n_conflicts << " epoch(s) of " << ne << " with conflicting spanning annotations\n"
 	   << "  *** check that epochs and annotations align as intended\n"
 	   << "  *** see EPOCH 'align' or 'offset' options\n"; 
-
-
+  
+  
   //
   // finally, calculate hypno stats
   //
   
-   calc_stats( verbose );
-   
-   return true;
+  calc_stats( verbose );
+  
+  return true;
 }   
 
 
@@ -326,7 +398,7 @@ void hypnogram_t::edit( timeline_t * timeline , param_t & param )
 	      if ( earlier == 2 )
 		lights_off = 0;  // set to start of EDF
 	      else
-		lights_off = clocktime_t::difference_seconds( st , et );
+		lights_off = clocktime_t::ordered_difference_seconds( st , et );
 	      
 	      logger << "  setting lights_off = " << et.as_string() 
 		     << " (" << lights_off << " secs, " 
@@ -380,7 +452,7 @@ void hypnogram_t::edit( timeline_t * timeline , param_t & param )
 	  if ( et.valid ) 
 	    {
 	      // assume that lights-on is always *after* EDF start
-	      lights_on = clocktime_t::difference_seconds( st , et );
+	      lights_on = clocktime_t::ordered_difference_seconds( st , et );
 	      logger << "  setting lights_on = " << et.as_string() 
 		     << " (" << lights_on << " secs, " << lights_on/60.0 << " mins from start)\n";
 	    }
@@ -498,31 +570,37 @@ void hypnogram_t::edit( timeline_t * timeline , param_t & param )
 	  Helper::halt( "lights_on must occur after lights_off" );
 	}
     }
+
   
   //
   // Set any epochs to L if they occur before lights off or after lights on
   //
-
-  const double epoch_mins = timeline->epoch_length() / 60.0 ;
-
   
   n_lights_fixed = 0;
   n_lights_fixed_was_sleep = 0;
-
+  
   int loff_n = 0 , lon_n = 0;
+
   if ( lights_off > 0 || lights_on > 0 )
     {
       
-      for (int e=0; e<stages.size(); e++)
+      for (int e=0; e < ne_gaps; e++)
 	{
-	  // this epoch ends before lights off?
+
+	  // ignore GAPS here
+	  if ( stages[e] == GAP ) continue;
+	  
+	  // this epoch /ends/ before lights off?
 	  // i.e. will /include/ the epoch when lights_out == epoch start
 	  //  this also means we include partial epochs, if lights_out is midway, but so be it
 	  
 	  if ( lights_off > 0 )
 	    {
+	      
 	      // n.b. fudge to avoid precision issues
-	      const double s = 60 * (e+1) * epoch_mins - 0.0001;
+	      //const double s = 60 * (e+1) * epoch_mins - 0.0001;
+	      const double s = epoch_start[e] + epoch_dur[e] - 0.0001;
+	      
 	      if ( s < lights_off )
 		{
 		  if ( is_sleep( stages[e] ) ) ++n_lights_fixed_was_sleep;
@@ -532,14 +610,18 @@ void hypnogram_t::edit( timeline_t * timeline , param_t & param )
 		}
 	    }
 	  
-	  // or, is this epoch starting at or after lights on?
+	  // or, is this epoch /starting/ at or after lights on?
 	  if ( lights_on > 0 )
             {
+
 	      // n.b. fudge to avoid precision issues
-              const double s = 60 * e * epoch_mins + 0.0001;	      
+              //const double s = 60 * e * epoch_mins + 0.0001;
+	      const double s = epoch_start[e] + 0.0001;	      
+
 	      if ( s >= lights_on )
                 {
-                  if ( is_sleep( stages[e] ) ) ++n_lights_fixed_was_sleep;
+                  if ( is_sleep( stages[e] ) )
+		    ++n_lights_fixed_was_sleep;
 		  stages[e] = LIGHTS_ON;
                   ++n_lights_fixed;
 		  ++lon_n;
@@ -570,21 +652,20 @@ void hypnogram_t::edit( timeline_t * timeline , param_t & param )
 
   if ( end_wake > 0 )
     {      
-      const int ne = stages.size();
-
+      
       // count sleep backwards
       double s = 0;
-      std::vector<double> rev_sleep( ne );
-      for (int e=ne-1; e>= 0; e-- )
+      std::vector<double> rev_sleep( ne_gaps );
+      for (int e=ne_gaps-1; e>= 0; e-- )
 	{
-	  if ( is_sleep( stages[e] ) ) s += epoch_mins;
+	  if ( is_sleep( stages[e] ) ) s += epoch_dur[e];
 	  rev_sleep[e] = s;	  
 	}
       
       // go forwards counting wake
       n_fixed = 0;
       double cumul_wake = 0; // or missing
-      for (int e=0; e<ne; e++)
+      for (int e=0; e<ne_gaps; e++)
 	{
 	  sleep_stage_t E1 = stages[e];
 	  
@@ -599,13 +680,16 @@ void hypnogram_t::edit( timeline_t * timeline , param_t & param )
 		cumul_wake = 0; // reset the counter
 	    }
 	  else if ( is_wake( stages[e] ) )
-	    cumul_wake += epoch_mins; 
+	    cumul_wake += epoch_dur[e] ;
 	  
 	  // std::cout << " e = " << e << " " << cumul_wake << " " << rev_sleep[e] << "\t" 
 	  //  	    << E1 << "\t" << stages[e] << "\t" << n_fixed << "\n";
 	}
       
+  // TODO..... continue edits from this point onwards....   TODO....
+  
 
+      
       // now do the reverse (i.e. to get rid of spurious leading S epochs)
       //  (with a long wait until 'real' sleep onset)
       
@@ -683,7 +767,9 @@ void hypnogram_t::edit( timeline_t * timeline , param_t & param )
   // allow this much 
   int epoch_lead_wake = mins_lead_wake / epoch_mins ; 
   int epoch_trail_wake = mins_trail_wake / epoch_mins ;
-  
+
+  n_ignore_wake = 0;
+	
   if ( trim_lead_wake || trim_trail_wake ) 
     {
       const int ne = stages.size();
@@ -2619,17 +2705,20 @@ void hypnogram_t::output( const bool verbose ,
 	}
 
       // split by ASC/DESC N2
-      writer.level( "N2_ASC" , globals::stage_strat );
-      writer.value( "MINS" , mins[ "N2_ASC" ] );
-      writer.value( "PCT" , mins[ "N2_ASC" ] / mins[ "N2" ] );
-
-      writer.level( "N2_DSC" , globals::stage_strat );
-      writer.value( "MINS" , mins[ "N2_DSC" ] );
-      writer.value( "PCT" , mins[ "N2_DSC" ] / mins[ "N2" ] );
-      
-      writer.level( "N2_FLT" , globals::stage_strat );
-      writer.value( "MINS" , mins[ "N2_FLT" ] );
-      writer.value( "PCT" , mins[ "N2_FLT" ] / mins[ "N2" ] );
+      if ( 0 )
+	{
+	  writer.level( "N2_ASC" , globals::stage_strat );
+	  writer.value( "MINS" , mins[ "N2_ASC" ] );
+	  writer.value( "PCT" , mins[ "N2_ASC" ] / mins[ "N2" ] );
+	  
+	  writer.level( "N2_DSC" , globals::stage_strat );
+	  writer.value( "MINS" , mins[ "N2_DSC" ] );
+	  writer.value( "PCT" , mins[ "N2_DSC" ] / mins[ "N2" ] );
+	  
+	  writer.level( "N2_FLT" , globals::stage_strat );
+	  writer.value( "MINS" , mins[ "N2_FLT" ] );
+	  writer.value( "PCT" , mins[ "N2_FLT" ] / mins[ "N2" ] );
+	}
       
       writer.unlevel( globals::stage_strat );      
 
@@ -2781,16 +2870,17 @@ void hypnogram_t::output( const bool verbose ,
   stagen[ LIGHTS_ON ] = 3;
 
 
-  // epoch size (in minutes)
-  const double epoch_mins = timeline->epoch_length() / 60.0 ; 
-  const double epoch_hrs = epoch_mins / 60.0;
-  const double epoch_sec = timeline->epoch_length();
-
   const int ne = timeline->num_epochs();
   
   clocktime_t starttime( clock_start );
-
-
+  
+  // std::cout << " NE / NE_GAPS " << ne << " " << ne_gaps << "\n";
+  // std::cout << " stages[] " << stages.size() << "\n";
+  // std::cout << " stages[] " << epoch_n.size() << "\n";
+  // std::cout << " gap[] " << epoch_gap.size() << "\n";
+  // std::cout << " dur[] " << epoch_dur.size() << "\n";
+  // std::cout << " start[] " << epoch_start.size() << "\n";
+  
   //
   // output in non-verbsoe mode (STAGES command)
   //
@@ -2801,35 +2891,53 @@ void hypnogram_t::output( const bool verbose ,
       if ( eannot == "." )
 	{
 	  logger << "  writing epoch-level sleep stages to standard out\n";
-	  for (int e=0;e<ne;e++)
-	    std::cout << globals::stage( stages[e] ) << "\n";
+	  for (int e=0;e<ne_gaps;e++)
+	    if ( ! epoch_gap[e] )
+	      std::cout << globals::stage( stages[ e ] ) << "\n";	
 	  return;
 	}      
       else if ( eannot != "" )
 	{
 	  logger << "  writing epoch-level sleep stages to " << eannot << "\n";
 	  std::ofstream EOUT( Helper::expand( eannot ).c_str() , std::ios::out );
-	  for (int e=0;e<ne;e++)
-	    EOUT << globals::stage( stages[e] ) << "\n";
+	  for (int e=0;e<ne_gaps;e++)
+	    if ( ! epoch_gap[e] )		      
+	      EOUT << globals::stage( stages[ e ] ) << "\n";
 	  EOUT.close();
 	  return;
 	}
       
       // Typical STAGE command
+
+      // actual existing epoch count
+      int ecnt = 0;
       
-      for (int e=0;e<ne;e++)
+      for (int e=0;e<ne_gaps;e++)
 	{
+
+	  // skip gaps in the output
+	  const bool is_gap = epoch_gap[e];
+	  if ( is_gap ) continue;
+	  
+	  // get actual epoch number
+	  const int eidx = epoch_n[e];
 	  
 	  // epoch-level stratification
 	  // epoch_n is the original 0-based epoch encoding
 	  // so, for diplay +1 , but for other calculations
 	  // we want to keep this original encoding
 	  
-	  writer.epoch( epoch_n[e] + 1 );
+	  //std::cout << " e " << e << " / " << ne << " --> " << epoch_n.size() << " " << epoch_n[e] << "\n";
 	  
+	  writer.epoch( eidx + 1 );
 	  
-	  // clock time based on EDF header
+	  // new - use actual epoch encoding (it's what it's there for!)
+	  interval_t interval = timeline->epoch( ecnt );
+	  ++ecnt;
 	  
+	  const double sec0 = interval.start * globals::tp_duration;
+
+	  // clock time based on EDF header	  
 	  if ( starttime.valid ) 
 	    {
 
@@ -2837,27 +2945,27 @@ void hypnogram_t::output( const bool verbose ,
 	      //clocktime_t current_clock_time = starttime;	      
 	      //current_clock_time.advance_seconds( epoch_sec * epoch_n[e] );
 	      
-	      // new - use actual epoch encoding (it's what it's there for!)
-	      interval_t interval = timeline->epoch( epoch_n[e] );	      
-	      const double sec0 = interval.start * globals::tp_duration;
               clocktime_t present = starttime;
               present.advance_seconds( sec0 );
-                            	      
+	      
+	      //std::cout << sec0 << " is sec0 " << present.as_string( ':' ) << "\n";
+	      
 	      writer.value( "CLOCK_TIME" , present.as_string( ':' ) );
 	      
 	      if ( verbose ) 
 		writer.value( "CLOCK_HOURS" ,  present.as_numeric_string() );
 	      
 	    }
-		  
-	  // time in minutes
 	  
-	  writer.value( "MINS" ,  epoch_n[e] * epoch_mins );
+	  // time in minutes (from start of stage-aligned epochs)	  
+	  writer.value( "MINS" ,  eidx * epoch_mins );
 	  
-	  // stages
+	  // time from EDF start (seconds)
+	  writer.value( "START" , sec0 ); 
 	  
+	  // stages	  
 	  writer.value( "STAGE" , globals::stage( stages[e] ) );
-
+	  
 	  // i.e. prior to anything being set to L or ?
 	  writer.value( "OSTAGE" , globals::stage( original_stages[e] ) );
 	  
@@ -2924,7 +3032,10 @@ void hypnogram_t::output( const bool verbose ,
 
       writer.epoch( timeline->display_epoch( e ) );
       
-
+      // new - use actual epoch encoding (it's what it's there for!)                                              
+      interval_t interval = timeline->epoch( e );
+      const double sec0 = interval.start * globals::tp_duration;
+      
       if ( starttime.valid ) 
 	{
 
@@ -2932,9 +3043,6 @@ void hypnogram_t::output( const bool verbose ,
 	  //clocktime_t current_clock_time = starttime;
 	  //current_clock_time.advance_seconds( epoch_sec * e );
 
-	  // new - use actual epoch encoding (it's what it's there for!)                                              
-	  interval_t interval = timeline->epoch( e );
-	  const double sec0 = interval.start * globals::tp_duration;
 	  clocktime_t present = starttime;
 	  present.advance_seconds( sec0 );
 	  
@@ -2947,7 +3055,11 @@ void hypnogram_t::output( const bool verbose ,
 
       // time in minutes (from EPOCH 1, not EDF start, i.e. if EPOCH align)
       writer.value( "MINS" ,  e * epoch_mins );
-    
+
+      
+      // time from EDF start (seconds)
+      writer.value( "START" , sec0 );
+
       // stages      
       writer.value( "STAGE" , globals::stage( stages[e] ) );    
       writer.value( "OSTAGE" , globals::stage( original_stages[e] ) );    

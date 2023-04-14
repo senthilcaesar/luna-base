@@ -104,7 +104,8 @@ enum suds_stage_t
    SUDS_NR = 4 , // generic NR (for 3-stage model)
    SUDS_REM = 5 ,
    SUDS_ARTIFACT = 6 , 
-   SUDS_UNKNOWN = 7 
+   SUDS_UNKNOWN = 7 ,
+   SUDS_LIGHTS 
   };
 
 enum suds_feature_t
@@ -165,7 +166,8 @@ struct suds_model_t {
   // populate specs[]
   bool read( const std::string & ,
 	     const std::string & winfile = "" , 
-	     const std::string & woutfile = "" );
+	     const std::string & woutfile = "" ,
+	     const std::string & default_channel = "C4_M1" );
 
   // use default
   void default_model();
@@ -371,11 +373,11 @@ struct suds_indiv_t {
 
   
   //
-  // write to an .annot
+  // add (internally) as an annotation
   //
-
-  void write_annots( const std::string & folder , const std::string & aname ,
-		     const Eigen::MatrixXd & , const std::vector<std::string> & , int , edf_t & );
+  
+  void add_annots( const Eigen::MatrixXd & , const std::vector<std::string> & , int , edf_t & );
+		   
   
   //
   // output obs vs prd kappas (5 and 3 level)
@@ -918,7 +920,8 @@ public:
     if ( s == SUDS_NR ) return "NR";
     if ( s == SUDS_REM ) return "R";
     if ( s == SUDS_ARTIFACT ) return "BAD";
-    if ( s == SUDS_UNKNOWN ) return "?";       
+    if ( s == SUDS_UNKNOWN ) return "?";
+    if ( s == SUDS_UNKNOWN ) return "L";       
     return "?";
   }
   
@@ -932,6 +935,7 @@ public:
     if ( s == "R" ) return SUDS_REM;
     if ( s == "BAD" ) return SUDS_ARTIFACT;
     if ( s == "?" ) return SUDS_UNKNOWN;
+    if ( s == "L" ) return SUDS_LIGHTS;
     return SUDS_UNKNOWN;
   }
 

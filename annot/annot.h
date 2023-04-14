@@ -146,7 +146,8 @@ struct annot_t
 				  bool * , 
 				  const edf_t & ,
 				  annot_t * ,
-				  const clocktime_t & , 
+				  const clocktime_t & , // time only
+				  const clocktime_t & , // date time 
 				  const std::string & ,
 				  const bool align_annots 
 				  );
@@ -727,6 +728,10 @@ struct annotation_set_t
     epoch_sec = 0 ; 
 
     annot_offset = 0LLU;
+
+    annot_offset_dir = -1;
+
+    annot_offset_table.clear();
     
   }
   
@@ -756,6 +761,26 @@ struct annotation_set_t
   // this ONLY impacts the WRITE-ANNOTS set of commands
   uint64_t annot_offset; 
 
+  int annot_offset_dir; // -1 or +1 depending on to add or subtract
+  //  ALIGN --> "-ve" encoding
+  //  WRITE-ANNOTS offset=X --> +ve encoding 
+
+  // for use w/ EDF-MINS only -- a table of offsets (i.e. to adjust
+  // for multiple gaops:  if above 'first' then add offset 'second'
+  std::map<double,uint64_t> annot_offset_table;
+
+  // multiple offsets
+  void clear_annot_offsets()
+  {
+    annot_offset_table.clear();
+  }
+  
+  void set_annot_offset( double s, uint64_t a )
+  {
+    annot_offset_table[ s ] = a; 
+  }
+
+  // single offset
   void set_annot_offset( uint64_t a )
   {
     annot_offset = a;
@@ -789,6 +814,8 @@ struct annotation_set_t
   }
   
   annot_t * from_EDF( edf_t & edf , edfz_t * edfz = NULL );
+  
+  int remap( const std::vector<std::string> & files , int , bool , bool );
   
   void clear() ;
   
@@ -838,7 +865,7 @@ struct annotation_set_t
   uint64_t first_in_interval( const std::vector<std::string> & requested ,
 			      const interval_t & range ) const;
   
-  std::set<uint64_t> starts( const std::vector<std::string> & requested ) const;
+  std::set<uint64_t> starts( const std::vector<std::string> & requested , uint64_t dur ) const;
 
   void write( const std::string & filename , param_t & param , edf_t & edf );
 
@@ -848,6 +875,7 @@ struct annotation_set_t
   // other annotations
   
   bool make_sleep_stage( const timeline_t & tl ,
+			 const bool force_remake = false , 
 			 const std::string & a_wake = "" , 
 			 const std::string & a_n1 = "", 
 			 const std::string & a_n2 = "", 

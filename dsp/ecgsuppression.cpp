@@ -170,6 +170,10 @@ void dsptools::ecgsuppression( edf_t & edf , param_t & param )
   
   logger << " setting SR to " << sr << "\n";
   
+
+  // default is to leave EEG in ECG-bad epochs 'as is'
+  const bool mask_bad_epochs = param.has( "mask-bad-epochs" );
+
   //
   // ECG channel
   //
@@ -193,26 +197,17 @@ void dsptools::ecgsuppression( edf_t & edf , param_t & param )
       if ( edf.header.is_annotation_channel( signals(s) ) ) continue;
 
       if ( edf.header.sampling_freq( signals(s) ) != sr ) 
-	{
-// 	  logger << " resampling channel " << signals.label(s) 
-// 		    << " from " << edf.header.sampling_freq( signals(s) )
-// 		    << " to " << sr << "\n";
-	  resample_channel( edf, signals(s) , sr );
-	}
+	resample_channel( edf, signals(s) , sr );
+
     }
 
   // and for ECG...
   if ( edf.header.sampling_freq( ecg_n ) != sr ) 
-    {
-//       logger << " resampling channel " << edf.header.label[ ecg_n ]
-// 		<< " from " << edf.header.sampling_freq( ecg_n )
-// 		<< " to " << sr << "\n";
-      resample_channel( edf, ecg_n , sr );
-    }
+    resample_channel( edf, ecg_n , sr );
   
   
   //
-  // pull entire trace (Assumes continuous/contiguous data)
+  // pull entire trace (assumes continuous/contiguous data)
   //
   
   interval_t interval = edf.timeline.wholetrace();
@@ -266,9 +261,19 @@ void dsptools::ecgsuppression( edf_t & edf , param_t & param )
 	epoch_bpm.push_back( bpm );
       else 
 	{
-	  edf.timeline.set_epoch_mask( epoch );
+	  
+	  // mask that epoch?
+	  if ( mask_bad_epochs ) 
+	    edf.timeline.set_epoch_mask( epoch );
+	  else
+	    {
+	      // else, just remove all R peaks from that epoch, i.e. so no correction is made
+	      
+	    }
 	  ++removed_epochs;
 	}
+      
+      
             
     }
 
@@ -591,10 +596,9 @@ rpeaks_t dsptools::mpeakdetect( const edf_t & edf ,
       minval.push_back( mn );
     }
   
-  // %%%%%%%%%% check for lead inversion %%%%%%%%%
-  //  % i.e. do minima precede maxima?
-  // if (minloc(length(minloc))<maxloc(length(minloc)))
-  
+  // check for lead inversion
+  //  do minima precede maxima?
+    
   int inv1 = 0;
   for (int i=0;i<minloc.size();i++)
     if ( minloc[ i ] < maxloc[ i ] ) ++inv1;
@@ -808,3 +812,13 @@ void dsptools::bpm( edf_t & edf , param_t & param )
   
 }
 
+int rpeaks_t::strip( const std::vector<interval_t> & bad_epochs )
+{
+  // return # of peaks removed
+
+  int removed = 0;
+  
+  
+
+  return removed;
+}

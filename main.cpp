@@ -1,5 +1,4 @@
 
-
 //    --------------------------------------------------------------------
 //
 //    This file is part of Luna.
@@ -40,7 +39,6 @@ void log_commands( int argc , char ** argv );
 int main(int argc , char ** argv )
 {
 
-  
   //
   // initial check for display of all commands
   //
@@ -112,7 +110,7 @@ int main(int argc , char ** argv )
 	  std::cerr << "List of domains\n"
 		    << "---------------\n\n";
 	  
-	  std::cerr << globals::cmddefs.help_domains()
+	  std::cerr << globals::cmddefs().help_domains()
 		    << "\n";
 
 	  std::cerr << "for commands within a domain, add the domain label after -h, e.g.\n"
@@ -129,19 +127,19 @@ int main(int argc , char ** argv )
 	  // 'all'  list all commands for all domains
 	  if ( p == "all" ) 
 	    {
-	      std::cerr << globals::cmddefs.help_commands() << "\n";
+	      std::cerr << globals::cmddefs().help_commands() << "\n";
 
 	    }
 	  // -h {domain}  list all commands (non-verbose)
-	  else if ( globals::cmddefs.is_domain(p) ) 
+	  else if ( globals::cmddefs().is_domain(p) ) 
 	    {
-	      std::cerr << "\n" << globals::cmddefs.help_commands( p ) << "\n";
+	      std::cerr << "\n" << globals::cmddefs().help_commands( p ) << "\n";
 	    }
 	  
 	  // -h {cmd}  list all options/tables (verbose)
-	  else if ( globals::cmddefs.is_cmd(p) ) 
+	  else if ( globals::cmddefs().is_cmd(p) ) 
 	    {
-	      std::cerr << globals::cmddefs.help( p , true , true ) << "\n";
+	      std::cerr << globals::cmddefs().help( p , true , true ) << "\n";
 	    }
 	  
 	  // otherwise, complain
@@ -241,7 +239,7 @@ int main(int argc , char ** argv )
 
   if ( argc >=2 && strcmp( argv[1] , "--merge" ) == 0 )
     {
-      global.api();
+      //global.api();
       std::vector<std::string> tok;
       for (int i=2;i<argc;i++) tok.push_back( argv[i] );
       Helper::merge_EDFs( tok );
@@ -1971,11 +1969,12 @@ void process_edfs( cmd_t & cmd )
           
       
       //
-      // Unset 'problem' flag (i.e. for bailing for this individual)
+      // Unset 'problem' and 'empty' flags (i.e. for bailing for this individual)
       //
       
       globals::problem = false;
 
+      globals::empty = false; 
 
       //
       // Limited to specific signals to load in?
@@ -2759,23 +2758,23 @@ void proc_dummy( const std::string & p , const std::string & p2 )
   if ( p == "cmddefs" ) 
     {
       
-      globals::cmddefs.add_domain( "misc" , "misc" ,  "Misc" );
+      globals::cmddefs().add_domain( "misc" , "misc" ,  "Misc" );
       
-      globals::cmddefs.add_cmd( "misc" , "comm1" , "this is a dummy command" );
-      globals::cmddefs.add_table( "comm1" , "XX" , "A simple table" , false );
-      globals::cmddefs.add_var( "comm1" , "XX" , "X", "Var X" );
-      globals::cmddefs.add_var( "comm1" , "XX" , "Y" , "Var Y" );
+      globals::cmddefs().add_cmd( "misc" , "comm1" , "this is a dummy command" );
+      globals::cmddefs().add_table( "comm1" , "XX" , "A simple table" , false );
+      globals::cmddefs().add_var( "comm1" , "XX" , "X", "Var X" );
+      globals::cmddefs().add_var( "comm1" , "XX" , "Y" , "Var Y" );
       
-      globals::cmddefs.add_cmd( "misc" , "comm2" , "this is a dummy command" );
-      globals::cmddefs.add_table( "comm2" , "CH,B" , "A nice table" , true );
-      globals::cmddefs.add_var( "comm2" , "CH,B" , "V1" , "Variable 1" );
-      globals::cmddefs.add_var( "comm2" , "CH,B" , "V2" , "Variable 2" );
+      globals::cmddefs().add_cmd( "misc" , "comm2" , "this is a dummy command" );
+      globals::cmddefs().add_table( "comm2" , "CH,B" , "A nice table" , true );
+      globals::cmddefs().add_var( "comm2" , "CH,B" , "V1" , "Variable 1" );
+      globals::cmddefs().add_var( "comm2" , "CH,B" , "V2" , "Variable 2" );
       
-      //   std::cout << globals::cmddefs.help( "comm1" , true )  << "\n\n\n";
-      std::cout << globals::cmddefs.help( "comm2" , true )  << "\n";
+      //   std::cout << globals::cmddefs().help( "comm1" , true )  << "\n\n\n";
+      std::cout << globals::cmddefs().help( "comm2" , true )  << "\n";
       
       // add a dummy tag
-      globals::cmddefs.add_tag( "Z" );
+      globals::cmddefs().add_tag( "Z" );
       
       zfiles_t files( "folder1" , "indiv1" ); 
       
@@ -2821,36 +2820,36 @@ void proc_dummy( const std::string & p , const std::string & p2 )
   if ( p == "cmddefs" )
     {
       
-      globals::cmddefs.add_cmd( "misc"   , "NEWONE" , "A test command" );
-      globals::cmddefs.add_table( "NEWONE" , "" , "Table 0, baseline" );
-      globals::cmddefs.add_table( "NEWONE" , "CH" , "Table 1, by channel" );
-      globals::cmddefs.add_table( "NEWONE" , "CH,X" , "Table 2, by channel and X" );
-      globals::cmddefs.add_table( "NEWONE" , "CH,X,Y" , "Table 2a, by channel and X/Y" , true );
-      globals::cmddefs.add_table( "NEWONE" , "CH,X,Z" , "Table 2b, by channel and X/Z"  );
+      globals::cmddefs().add_cmd( "misc"   , "NEWONE" , "A test command" );
+      globals::cmddefs().add_table( "NEWONE" , "" , "Table 0, baseline" );
+      globals::cmddefs().add_table( "NEWONE" , "CH" , "Table 1, by channel" );
+      globals::cmddefs().add_table( "NEWONE" , "CH,X" , "Table 2, by channel and X" );
+      globals::cmddefs().add_table( "NEWONE" , "CH,X,Y" , "Table 2a, by channel and X/Y" , true );
+      globals::cmddefs().add_table( "NEWONE" , "CH,X,Z" , "Table 2b, by channel and X/Z"  );
 
-      globals::cmddefs.add_var( "NEWONE" , "" , "V1" , "some var1" );
-      globals::cmddefs.add_var( "NEWONE" , "" , "V2" , "some var2" );
+      globals::cmddefs().add_var( "NEWONE" , "" , "V1" , "some var1" );
+      globals::cmddefs().add_var( "NEWONE" , "" , "V2" , "some var2" );
 
-      globals::cmddefs.add_var( "NEWONE" , "CH" , "V1" , "some var1" );
-      globals::cmddefs.add_var( "NEWONE" , "CH" , "V2" , "some var2" );
-      globals::cmddefs.add_var( "NEWONE" , "CH" , "V3" , "some var3" );
+      globals::cmddefs().add_var( "NEWONE" , "CH" , "V1" , "some var1" );
+      globals::cmddefs().add_var( "NEWONE" , "CH" , "V2" , "some var2" );
+      globals::cmddefs().add_var( "NEWONE" , "CH" , "V3" , "some var3" );
 
-      globals::cmddefs.add_var( "NEWONE" , "CH,X" , "V2a" , "some var2" );
-      globals::cmddefs.add_var( "NEWONE" , "CH,X" , "V3a" , "some var3" );
+      globals::cmddefs().add_var( "NEWONE" , "CH,X" , "V2a" , "some var2" );
+      globals::cmddefs().add_var( "NEWONE" , "CH,X" , "V3a" , "some var3" );
 
-      globals::cmddefs.add_var( "NEWONE" , "CH,X,Y" , "V2a" , "some var2" );
-      globals::cmddefs.add_var( "NEWONE" , "CH,X,Y" , "V3a" , "some var3" );
+      globals::cmddefs().add_var( "NEWONE" , "CH,X,Y" , "V2a" , "some var2" );
+      globals::cmddefs().add_var( "NEWONE" , "CH,X,Y" , "V3a" , "some var3" );
 
-      globals::cmddefs.add_var( "NEWONE" , "CH,X,Z" , "V2a" , "some var2" );
-      globals::cmddefs.add_var( "NEWONE" , "CH,X,Z" , "V3a" , "some var3" );
+      globals::cmddefs().add_var( "NEWONE" , "CH,X,Z" , "V2a" , "some var2" );
+      globals::cmddefs().add_var( "NEWONE" , "CH,X,Z" , "V3a" , "some var3" );
 
-      //  std::cout << globals::cmddefs.help_domains() << "\n";
-      //std::cout << globals::cmddefs.help_commands() << "\n";
+      //  std::cout << globals::cmddefs().help_domains() << "\n";
+      //std::cout << globals::cmddefs().help_commands() << "\n";
       
-      globals::cmddefs.set_compressed( "NEWONE" , tfac_t( "CH,X,Z" ) );
-      globals::cmddefs.set_compressed( "NEWONE" , tfac_t( "CH,X,Y" ) , false );
+      globals::cmddefs().set_compressed( "NEWONE" , tfac_t( "CH,X,Z" ) );
+      globals::cmddefs().set_compressed( "NEWONE" , tfac_t( "CH,X,Y" ) , false );
       
-      std::cout << globals::cmddefs.help( "NEWONE" , true ) << "\n";
+      std::cout << globals::cmddefs().help( "NEWONE" , true ) << "\n";
       
       
       std::exit(0);
@@ -2859,7 +2858,7 @@ void proc_dummy( const std::string & p , const std::string & p2 )
       param.add( "epoch" );
       param.add( "ep" );
       std::set<std::string> unk;
-      std::cout << "st = " << globals::cmddefs.check( "ANNOTS" , param.keys() , &unk ) << "\n";
+      std::cout << "st = " << globals::cmddefs().check( "ANNOTS" , param.keys() , &unk ) << "\n";
       
       std::set<std::string>::const_iterator uu = unk.begin();
       while ( uu != unk.end() ) { std::cout << " bad param " << *uu << "\n"; ++uu; } 
@@ -2936,7 +2935,72 @@ void proc_dummy( const std::string & p , const std::string & p2 )
     }
 
 
+  //
+  // test date/time functions
+  //
 
+  if ( p == "datetime" )
+    {
+      
+      if ( 0 )
+	{
+	  for (int c=0; c<10000; c++)
+	    {
+	      std::string ds = date_t::datestring( c );
+	      date_t dt( ds );
+	      int c2 = date_t::count( dt );
+	      std::cout << ( c != c2 ? "*****" : "" ) 
+			<< c << "\t"
+			<< c2 << "\t"
+			<< ds << "\n";
+	    }
+	}
+
+      if ( 1 )
+	{
+	  std::string inp1, inp2;
+	  std::cin >> inp1 >> inp2;
+	  clocktime_t t1( inp1 );
+	  clocktime_t t2( inp2 );
+
+	  std::cout << "t1: "
+		    << t1.valid << "\t"
+		    << t1.as_string( ) << "\t"
+		    << t1.as_datetime_string( ) << "\n";
+	  //<< t1.d << " - " << t1.h << ":" << t1.m << ":" << t1.s << "\n";
+	  
+	  std::cout << "t2: "
+		    << t2.valid << "\t"
+		    << t2.as_string( ) << "\t"
+		    << t2.as_datetime_string( ) << "\n";
+	  //<< t2.d << " - " << t2.h << ":" << t2.m << ":" << t2.s << "\n";
+
+	  const int earlier = clocktime_t::earlier( t1 , t2 ) ; 
+	  
+	  const double difh = earlier == 0 ? 0 : ( earlier == 1 ? clocktime_t::difference_hours( t1 , t2 ) : clocktime_t::difference_hours( t2 , t1 )   );
+	  const double difs = earlier == 0 ? 0 : ( earlier == 1 ? clocktime_t::difference_seconds( t1 , t2 ) : clocktime_t::difference_seconds( t2 , t1 ) );
+
+	  clocktime_t midpoint;
+	  midpoint.midpoint( t1 , t2 );
+	  
+ 	  std::cout << " earlier = " << earlier << "\n";
+	  std::cout << " t1 - t2 (hours) = " << difh << "\n";
+	  std::cout << " t1 - t2 (secs) = " << difs << "\t" << difs / 3600.0 << "\n";
+	  std::cout << " midpoint = " << midpoint.as_datetime_string() << "\n";
+	  std::cout << "\n";
+	  clocktime_t nt = t1;
+	  for (int i=0;i<48;i++)
+	    {
+	      //nt.advance_hrs( 1.222 );
+	      nt.advance( clocktime_t( "+1:30" ) );
+	      std::cout << "  --> " << nt.as_string() << "\t" << nt.as_datetime_string() << "\n";
+	    }
+	}
+      
+      
+      
+      std::exit(0);
+    }
   
 
   //
@@ -3017,7 +3081,7 @@ void proc_dummy( const std::string & p , const std::string & p2 )
 
   if ( p == "fir" || p == "fft" || p == "dfa" || p == "fft-test" || p == "mtm" || p == "tv" || p == "psi" 
        || p == "dynam" || p == "ica" || p == "robust" || p == "fip" || p == "sl" || p == "acf" || p == "otsu"
-       || p == "desats" || p == "zpks" || p == "gc" || p == "detrend" || p == "emd" ) 
+       || p == "desats" || p == "zpks" || p == "gc" || p == "detrend" || p == "emd" || p == "tri" ) 
     {
 
       int cnt= 0;
@@ -3427,6 +3491,24 @@ void proc_dummy( const std::string & p , const std::string & p2 )
       std::exit(1);
     }
     
+
+  if ( p == "tri" )
+    {
+      int n = x.size();
+      int h = 7 ;
+      double w = 0.05;
+
+      Eigen::VectorXd Y = eigen_ops::copy_array( x );
+
+      Eigen::VectorXd Y2 = eigen_ops::tri_moving_average( Y , h , w );
+      Eigen::VectorXd Y3 = eigen_ops::moving_average( Y , h );
+
+      for (int i=0; i<n; i++)
+	std::cout << Y[i] << "\t" << Y2[i] << "\t" << Y3[i] << "\n";
+      
+    }
+  
+
   
   if ( p == "fft" )
     {

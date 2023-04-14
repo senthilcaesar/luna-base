@@ -259,6 +259,8 @@ void proc_extend_annots( edf_t & , param_t & );
 void proc_list_all_annots( edf_t & , param_t & );
 void proc_list_spanning_annots( edf_t & , param_t & );
 void proc_force_edf( edf_t & , param_t & );
+void proc_edf_minus( edf_t & , param_t & );
+void proc_set_timestamps( edf_t & , param_t & );
 
 void proc_tag( param_t & );
 void set_tag( const std::string & t = "." );
@@ -281,6 +283,7 @@ void proc_dereference( edf_t & , param_t & );
 void proc_adjust( edf_t & , param_t & );
 void proc_rerecord( edf_t & edf , param_t & param );
 void proc_canonical( edf_t & edf , param_t & param );
+void proc_remap_annots( edf_t & edf , param_t & param );
 
 void proc_dump( edf_t & , param_t & );
 void proc_dump_mask( edf_t & , param_t & );
@@ -310,6 +313,7 @@ void proc_annot2signal( edf_t & , param_t & );
 void proc_signal2annot( edf_t & , param_t & );
 void proc_sig_annot_mean( edf_t & , param_t & );
 void proc_annot2cache( edf_t & , param_t & );
+void proc_sig_tabulate( edf_t & edf , param_t & param );
 
 void proc_record_dump( edf_t & , param_t & );
 void proc_record_table( edf_t & , param_t & );
@@ -325,6 +329,9 @@ void proc_mask( edf_t & , param_t & );
 void proc_eval( edf_t & , param_t & );
 void proc_epoch( edf_t & , param_t & );
 void proc_slice( edf_t & , param_t & , int );
+
+void proc_freeze( edf_t & , param_t & );
+void proc_thaw( edf_t & , param_t & );
 
 void proc_trans( edf_t & , param_t & );
 
@@ -343,6 +350,7 @@ void proc_correct( edf_t & , param_t & );
 
 void proc_resample( edf_t & , param_t & );
 void proc_zoh( edf_t & , param_t & );
+void proc_moving_average( edf_t & , param_t & );
 void proc_filter( edf_t & , param_t & );
 void proc_filter_legacy( edf_t & , param_t & );
 void proc_filter_design( edf_t & , param_t & );

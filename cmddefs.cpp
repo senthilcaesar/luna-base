@@ -20,13 +20,22 @@
 //
 //    --------------------------------------------------------------------
 
-
-#include "cmddefs.h"
-
 #include "luna.h"
 #include <iomanip>
 
+//#pragma GCC push_options
+//#pragma GCC optimize ("O0")
+
+#include "cmddefs.h"
+
 extern globals global;
+
+
+cmddefs_t::cmddefs_t()
+{
+  //init();
+}
+
 
 void cmddefs_t::init()
 {
@@ -74,7 +83,7 @@ void cmddefs_t::init()
   add_domain( "misc"       , "Misc"            , "Misc. commands" );
   add_domain( "exp"        , "Experimental"    , "Experimental features: under heavy development, for internal use only" );
   add_domain( "cmdline"    , "Command-line"    , "Functions that do not operate on EDFs" );  
-   
+
 
   /////////////////////////////////////////////////////////////////////////////////
   //
@@ -421,7 +430,7 @@ void cmddefs_t::init()
   add_var( "EPOCH" , "E" , "MID" , "Midpoint of epoch (seconds elapsed from EDF start)" );
   add_var( "EPOCH" , "E" , "START" , "Start of epoch (seconds elapsed from EDF start)" );
   add_var( "EPOCH" , "E" , "STOP" , "Stop of epoch (seconds elapsed from EDF start)" );
-
+  add_var( "EPOCH" , "E" , "TP" , "Interval in time-points" );
 
   // EPOCH-ANNOT
 
@@ -1271,7 +1280,6 @@ void cmddefs_t::init()
   add_var( "POPS", "" , "RECALL" , "Recall" );
   add_var( "POPS", "" , "RECALL3" , "Recall, 3-class" );
   add_var( "POPS", "" , "RECALL_WGT" , "Recall,weighted" );
-
   add_var( "POPS", "" , "SLP_LAT_OBS" , "Observed sleep latency" );
   add_var( "POPS", "" , "SLP_LAT_PRD" , "Predicted sleep latency" );
   add_var( "POPS", "" , "REM_LAT_OBS" , "Observed REM latency" );
@@ -1289,6 +1297,8 @@ void cmddefs_t::init()
   add_var( "POPS" , "E" , "PP_W" , "Posterior probability of wake" );
   add_var( "POPS" , "E" , "PRED", "Predicted stage" );
   add_var( "POPS" , "E" , "PRIOR" , "Observed stage (if known)" );
+  add_var( "POPS" , "E" , "START" , "Start time (hh:mm:ss)" );
+  add_var( "POPS" , "E" , "STOP" , "Stop time (hh:mm:ss)");
   
   add_table( "POPS" , "SS" , "Sleep-stage summaries" );
   add_var( "POPS" , "SS" , "OBS" , "Observed stage duration (for included epochs)");
@@ -1304,7 +1314,9 @@ void cmddefs_t::init()
   add_var( "POPS" , "FTR" , "FINAL" , "Column, if included" );
   add_var( "POPS" , "FTR" , "INC" , "Included?" );
   add_var( "POPS" , "FTR" , "LABEL" , "Feature label" );
+  add_var( "POPS" , "FTR" , "LABEL_ORIG" , "Feature label" );
   add_var( "POPS" , "FTR" , "LEVEL" , "Level (1/2)" );
+  add_var( "POPS" , "FTR" , "ROOT" , "Root label" );
 
   add_table( "POPS" , "ETYPE" , "Error type" );
   add_var( "POPS" , "ETYPE" , "ACC" , "Accuracy" );
@@ -1325,6 +1337,68 @@ void cmddefs_t::init()
   add_var( "POPS" , "PRED,OBS" , "N" , "Count" );
   add_var( "POPS" , "PRED,OBS" , "P" , "Proportion" );
 
+
+  add_table( "POPS" , "CHEQ" , "Channel-equivalent stats" );
+  add_var( "POPS", "CHEQ" , "ACC" , "Accuracy" );
+  add_var( "POPS", "CHEQ" , "ACC3" , "Accuracy for 3-class model" );
+  add_var( "POPS", "CHEQ" , "K" , "Kappa statistic" );
+  add_var( "POPS", "CHEQ" , "K3" , "Kappa for 3-class model" );
+  add_var( "POPS", "CHEQ" , "F1" , "F1 statistic" );
+  add_var( "POPS", "CHEQ" , "F13" , "F1 for 3-class model" );
+  add_var( "POPS", "CHEQ" , "F1_WGT" , "F1 weighted" );
+  add_var( "POPS", "CHEQ" , "CONF" , "Mean confidence (max. posterior)" );
+  add_var( "POPS", "CHEQ" , "MCC" , "Matthews correlation coefficient" );
+  add_var( "POPS", "CHEQ" , "MCC3" , "Matthews correlation coefficient, 3-class" );
+  add_var( "POPS", "CHEQ" , "PREC" , "Precision" );
+  add_var( "POPS", "CHEQ" , "PREC_WGT" , "Precision, weighted" );
+  add_var( "POPS", "CHEQ" , "PREC3" , "Precision, 3-class" );
+  add_var( "POPS", "CHEQ" , "RECALL" , "Recall" );
+  add_var( "POPS", "CHEQ" , "RECALL3" , "Recall, 3-class" );
+  add_var( "POPS", "CHEQ" , "RECALL_WGT" , "Recall,weighted" );
+  add_var( "POPS", "CHEQ" , "REM_LAT_OBS" , "Observed REM latency" );
+  add_var( "POPS", "CHEQ" , "REM_LAT_PRD" , "Predicted REM latency" );
+  add_var( "POPS", "CHEQ" , "SLP_LAT_OBS" , "Observed sleep latency" );
+  add_var( "POPS", "CHEQ" , "SLP_LAT_PRD" , "Predicted sleep latency" );
+  
+  add_table( "POPS" , "E,CHEQ" , "POPS predictions" );
+  add_var( "POPS" , "E,CHEQ" , "FLAG" , "-1/0/1/2 excluded/match/disc5/disc3" );
+  add_var( "POPS" , "E,CHEQ" , "CONF" , "Confidence score" );
+  add_var( "POPS" , "E,CHEQ" , "PP_N1" , "Posterior probability of N1" );
+  add_var( "POPS" , "E,CHEQ" , "PP_N2" , "Posterior probability of N2" );
+  add_var( "POPS" , "E,CHEQ" , "PP_N3" , "Posterior probability of N3" );
+  add_var( "POPS" , "E,CHEQ" , "PP_R" , "Posterior probability of REM" );
+  add_var( "POPS" , "E,CHEQ" , "PP_W" , "Posterior probability of wake" );
+  add_var( "POPS" , "E,CHEQ" , "PRED", "Predicted stage" );
+  add_var( "POPS" , "E,CHEQ" , "PRIOR" , "Observed stage (if known)" );
+  add_var( "POPS" , "E,CHEQ" , "START" , "Start time (hh:mm:ss)" );
+  add_var( "POPS" , "E,CHEQ" , "STOP" , "Stop time (hh:mm:ss)");
+  
+  add_table( "POPS" , "SS,CHEQ" , "Sleep-stage summaries" );
+  add_var( "POPS" , "SS,CHEQ" , "OBS" , "Observed stage duration (for included epochs)");
+  add_var( "POPS" , "SS,CHEQ" , "ORIG" , "Observed stage duration (all epochs)");
+  add_var( "POPS" , "SS,CHEQ" , "PRF" , "Predicted stage duration, weighted" );
+  add_var( "POPS" , "SS,CHEQ" , "PR1" , "Predicted stage duration, based on most likely" );
+  add_var( "POPS" , "SS,CHEQ" , "F1" , "F1 statistic" );
+  add_var( "POPS" , "SS,CHEQ" , "RECALL" , "Recall" );
+  add_var( "POPS" , "SS,CHEQ" , "PREC" , "Precision" );
+
+  add_table( "POPS" , "FTR,CHEQ" , "Feature stats" );
+  add_var( "POPS" , "FTR,CHEQ" , "BAD" , "Number of bad epochs" );
+  add_var( "POPS" , "FTR,CHEQ" , "DROPPED" , "Feature completely dropped" );
+  add_var( "POPS" , "FTR,CHEQ" , "PROP" , "Proportion of bad epochs" );
+
+
+  add_table( "POPS" , "ETYPE,CHEQ" , "Error type" );
+  add_var( "POPS" , "ETYPE,CHEQ" , "ACC" , "Accuracy" );
+  add_var( "POPS" , "ETYPE,CHEQ" , "N" , "Count" );
+
+  add_table( "POPS" , "ETYPE,CHEQ,SS" , "Error type" );
+  add_var( "POPS" , "ETYPE,CHEQ,SS" , "ACC" , "Accuracy" );
+  add_var( "POPS" , "ETYPE,CHEQ,SS" , "N" , "Count" );
+
+  add_table( "POPS" , "PRED,OBS,CHEQ" , "Confusion matrix" );
+  add_var( "POPS" , "PRED,OBS,CHEQ" , "N" , "Count" );
+  add_var( "POPS" , "PRED,OBS,CHEQ" , "P" , "Proportion" );
 
   
   /////////////////////////////////////////////////////////////////////////////////
@@ -1613,6 +1687,11 @@ void cmddefs_t::init()
   add_var( "MTM" , "CH" , "SPEC_SLOPE_MN" , "Spectral slope (mean over epochs)" );
   add_var( "MTM" , "CH" , "SPEC_SLOPE_SD" , "Spectral slope (SD over epochs)" );
 
+  add_table( "MTM", "CH,SEG", "Segment timing details" );
+  add_var( "MTM" , "CH,SEG" , "START" , "Start time (seconds)" );
+  add_var( "MTM" , "CH,SEG" , "STOP" , "Stop time (seconds)");
+  add_var( "MTM" , "CH,SEG" , "DISC" , "Spans a discontinuity (0/1=N/Y)");
+  
   add_table( "MTM" , "CH,F" , "Whole-night, per-channel power" );
   add_var( "MTM" , "CH,F" , "MTM" , "Power" );
 
@@ -1893,6 +1972,26 @@ void cmddefs_t::init()
   add_var( "SPINDLES" , "F" , "MSP_DENS" , "m-spindle density conditional on m-spindle frequency" );
   
 
+  add_table( "SPINDLES" , "F,SEED" , "Spindle propagation seed summaries" );
+  add_var( "SPINDLES" , "F,SEED" , "R" , "Relative SEED position among overlapping CHs" );
+  add_var( "SPINDLES" , "F,SEED" , "T" , "Relative SEED time among overlapping CHs" );
+
+  add_table( "SPINDLES" , "F,CH,SEED" , "Spindle propagation seed-channel stats" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "A" , "Channel amplitude relative to SEED" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "A_PRESEED" , "Channel amplitude relative to SEED (CH<SEED)" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "A_POSTSEED" , "Channel amplitude relative to SEED (SEED<CH)" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "N" , "Count above threshold CH-peaks" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "N_PRESEED" , "Count above threshold pre-SEED CH-peaks" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "N_POSTSEED" , "Count above threshold post-SEED CH-peaks" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "T" , "CH-peak time relative to SEED" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "T_PRESEED" , "CH-peak time relative to SEED (CH<SEED)" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "T_POSTSEED" , "CH-peak time relative to SEED (SEED<CH)" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "P" , "Proportion above threshold CH-peaks" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "P_PRESEED" , "Proportion above threshold pre-SEED CH-peaks" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "P_POSTSEED" , "Proportion above threshold post-SEED CH-peaks" );
+  add_var( "SPINDLES" , "F,CH,SEED" , "PP" , "CH-SEED pre/post metric" );
+
+  
   add_table( "SPINDLES" , "MSPINDLE" , "Merged-spindle output [collate]" );
   add_var( "SPINDLES" , "MSPINDLE" , "MSP_DUR","Duration of this m-spindle" );
   add_var( "SPINDLES" , "MSPINDLE" , "MSP_F","Estimated frequency of this m-spindle" );
@@ -2024,21 +2123,19 @@ void cmddefs_t::init()
   add_param( "SPINDLES" , "perm-whole-trace" , "" , "SO/SP coupling: Do not use within-epoch shuffling" );
   add_param( "SPINDLES" , "all-spindles" , "" , "SO/SP coupling: Sonsider all spindles, whether ot not they overlap a SO" );
   add_param( "SPINDLES" , "stratify-by-phase" , "" , "SO/SP coupling: Overlap statistics per SO phase bin" );
-  
-  add_var( "SPINDLES" , "CH,F" , "COUPL_MAG" , "SO/SP coupling: magnitude (original statistic)" );
-  add_var( "SPINDLES" , "CH,F" , "COUPL_MAG_NULL" , "SO/SP coupling: meanmagnitude under null" );
-  add_var( "SPINDLES" , "CH,F" , "COUPL_MAG_Z" , "SO/SP coupling: magnitude (empirical Z)" );
-  add_var( "SPINDLES" , "CH,F" , "COUPL_MAG_EMP" , "SO/SP coupling: magnitude (empirical P)" );  
-  
-  add_var( "SPINDLES" , "CH,F" , "COUPL_OVERLAP" , "SO/SP coupling: overlap (original statistic)" );
-  add_var( "SPINDLES" , "CH,F" , "COUPL_OVERLAP_NULL" , "SO/SP coupling: mean overlap under null" );
-  add_var( "SPINDLES" , "CH,F" , "COUPL_OVERLAP_Z" , "SO/SP coupling: overlap (empirical Z)" );
-  add_var( "SPINDLES" , "CH,F" , "COUPL_OVERLAP_EMP" , "SO/SP coupling: overlap (empirical P)" );
 
-  add_var( "SPINDLES" , "CH,F" , "COUPL_ANGLE" , "SO/SP coupling: mean SO phase angle at spindle peak" );
-    
-  add_var( "SPINDLES" , "CH,F" , "COUPL_PV" , "SO/SP coupling: asymptotic ITPC p-value" );
-  add_var( "SPINDLES" , "CH,F" , "COUPL_SIGPV_NULL" , "SO/SP coupling: null rate of asymptotic ITPC p-value < 0.05" );
+  add_table( "SPINDLES" , "ANCHOR,CH,F" , "SP/SO coupling stats" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_MAG" , "SO/SP coupling: magnitude (original statistic)" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_MAG_NULL" , "SO/SP coupling: meanmagnitude under null" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_MAG_Z" , "SO/SP coupling: magnitude (empirical Z)" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_MAG_EMP" , "SO/SP coupling: magnitude (empirical P)" );  
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_OVERLAP" , "SO/SP coupling: overlap (original statistic)" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_OVERLAP_NULL" , "SO/SP coupling: mean overlap under null" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_OVERLAP_Z" , "SO/SP coupling: overlap (empirical Z)" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_OVERLAP_EMP" , "SO/SP coupling: overlap (empirical P)" );  
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_ANGLE" , "SO/SP coupling: mean SO phase angle at spindle peak" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_PV" , "SO/SP coupling: asymptotic ITPC p-value" );
+  add_var( "SPINDLES" , "ANCHOR,CH,F" , "COUPL_SIGPV_NULL" , "SO/SP coupling: null rate of asymptotic ITPC p-value < 0.05" );
 
   add_table( "SPINDLES" , "CH,F,PHASE" , "SO-phase stratified spindle overlap" );
   add_var( "SPINDLES" , "CH,F,PHASE" , "COUPL_OVERLAP" , "SO/SP coupling: overlap (original statistic)" );
@@ -2413,12 +2510,22 @@ void cmddefs_t::init()
 
   add_param( "EXE" , "sig" , "C3,C4,F3,F4" , "Optionally specify channels (defaults to all)" );
   add_param( "EXE" , "uni" , "" , "For N signals, run N univariate analyses, rather than a single multi-signal one" );
+  add_param( "EXE" , "representative" , "4" , "Extract N representative epochs" );
     
   add_param( "EXE" , "m" , "5" , "PDC embedding dimension" );
   add_param( "EXE" , "t" , "1" , "PDC span" );
 
   add_param( "EXE" , "k" , "10" , "Number of clusters" );
     
+  add_table( "EXE" , "E,CH" , "Epoch cluster assignment" );
+  add_var( "EXE" , "E,CH" , "CL" , "Cluster code [cluster]" );
+  add_var( "EXE" , "E,CH" , "K" , "Representative split [representative]");
+  add_var( "EXE" , "E,CH" , "KE" , "Representative epoch [representative]");
+
+  add_table( "EXE" , "CH,K" , "Representative split info [representative]" );
+  add_var( "EXE" , "CH,K" , "E" , "Representative epoch for split K" );
+  add_var( "EXE" , "CH,K" , "N" , "Number of epochs in split K" );
+
   add_table( "EXE" , "E,CH" , "Epoch cluster assignment" );
   add_var( "EXE" , "E,CH" , "CL" , "Cluster code" );
 
@@ -2465,17 +2572,12 @@ void cmddefs_t::init()
 
 
 
-cmddefs_t::cmddefs_t()
-{
-  init();
-}
-
 
 tfac_t::tfac_t( const std::string & s , const std::string & delim ) { 
   std::vector<std::string> tok = Helper::parse( s , delim );
   for (int i=0;i<tok.size();i++) 
     {
-      if ( tok[i][0] != '_' && ! globals::cmddefs.is_tag( tok[i] ) )
+      if ( tok[i][0] != '_' && ! globals::cmddefs().is_tag( tok[i] ) )
 	fac.insert( tok[i] );
     } 
 }
@@ -2781,10 +2883,10 @@ std::string cmddefs_t::help( const std::string & cmd , bool show_domain_label , 
 bool cmddefs_t::exists( const std::string & cmd ,
 			const tfac_t & tfac ) const
 {
-    
+  
   if ( cmds.find( cmd ) == cmds.end() )
-    return false;
-    
+      return false;
+
   if ( ofacs.find( cmd ) == ofacs.end() ) return false; 
 
   bool rv = ofacs.find( cmd )->second.find( tfac ) != ofacs.find( cmd )->second.end() ;
@@ -2843,3 +2945,158 @@ std::set<std::string> cmddefs_t::variables( const std::string & cmd ,  const par
   return r;
 }
 
+
+// domain description
+void cmddefs_t::add_domain( const std::string & domain , const std::string & label ,  const std::string & desc )
+{
+  domain_label[ domain ] = label;
+  domain_desc[ domain ] = desc;
+}
+
+bool cmddefs_t::is_domain( const std::string & d ) 
+{
+  return domain_label.find( d ) != domain_label.end();
+}
+
+// command description 
+void cmddefs_t::add_cmd( const std::string & domain , const std::string & cmd , const std::string & desc , const bool hide )
+{
+  dcmds[ domain ].insert( cmd );
+  cmds[ cmd ] = desc ; 
+  cdomain[ cmd ] = domain;
+  chide[ cmd ] = hide ;
+}
+
+// hidden command description 
+void cmddefs_t::hide_cmd( const std::string & domain , const std::string & cmd , const std::string & desc )
+{
+  add_cmd( domain, cmd , desc , true );    
+}
+
+bool cmddefs_t::is_cmd( const std::string & c ) 
+{
+  return cmds.find( c ) != cmds.end();
+}
+
+
+// command URLs , e.g.  zzz.bwh.harvard.edu/luna/ref/
+void cmddefs_t::add_url( const std::string & cmd , const std::string & url ) 
+{
+  if ( cmds.find( cmd ) == cmds.end() ) Helper::halt( cmd + " not registered" );
+  curl[ cmd ] = url;
+}
+
+void cmddefs_t::add_note( const std::string & cmd , const std::string & note ) 
+{
+  if ( cmds.find( cmd ) == cmds.end() ) Helper::halt( cmd + " not registered" );
+  cnotes[ cmd ] = note;
+}
+
+// parameters for this command
+void cmddefs_t::add_param( const std::string & cmd , const std::string & param , 
+			   const std::string & ex ,  // "" if none
+			   const std::string & desc , 
+			   const std::string & requirements  ,
+			   const bool hide  )
+{
+  pdesc[ cmd ][ param ] = desc;
+  preq[ cmd ][ param ] = requirements;
+  px[ cmd ][ param ] = ex;
+  phide[ cmd ][ param ] = hide;
+}
+
+
+// hide parameter for this command
+void cmddefs_t::hide_param( const std::string & cmd , const std::string & param , 
+			    const std::string & ex ,  // "" if none
+			    const std::string & desc , 
+			    const std::string & requirements )
+{
+  add_param( cmd , param , ex , desc , requirements , true );
+}
+
+
+// output from this command , "CMD" , "F,B,CH,E" , "desc" , is compressed Y/N
+void cmddefs_t::add_table( const std::string & cmd , const std::string & factors , const std::string & desc , bool isz , bool hide )
+{
+  tfac_t tfac( factors );
+  otables[ cmd ][ tfac ] = desc ; 
+  ofacs[ cmd ][ tfac ] = isz ; 
+  ohide[ cmd ][ tfac ] = hide;
+}
+
+void cmddefs_t::hide_table( const std::string & cmd , const std::string & factors , const std::string & desc , bool isz )
+{
+  add_table( cmd , factors , desc , isz , true );
+}
+
+// add variable
+void cmddefs_t::add_var( const std::string & cmd , const std::string & factors , const std::string & var , const std::string & desc , const bool hide )
+{
+  tfac_t tfac( factors );
+  ovars[ cmd ][ tfac ][ var ] = desc;
+  vhide[ cmd ][ tfac ][ var ] = hide;
+}
+
+// add hidden variable
+void cmddefs_t::hide_var( const std::string & cmd , const std::string & factors , const std::string & var , const std::string & desc )
+{
+  add_var( cmd , factors , var , desc , true );
+}
+
+
+
+void cmddefs_t::all_compressed( bool b ) { allz = b; } 
+
+bool cmddefs_t::all_compressed() const { return allz; }
+
+void cmddefs_t::none_compressed( bool b ) { nonez = b; } 
+
+bool cmddefs_t::none_compressed() const { return nonez; }
+
+
+void cmddefs_t::add_tag( const std::string & tag ) { tags.insert( tag ); } 
+
+void cmddefs_t::clear_tags() { tags.clear(); }
+
+bool cmddefs_t::is_tag( const std::string & tag ) const { return tags.find( tag ) != tags.end(); } 
+
+
+
+bool cmddefs_t::hidden_cmd( const std::string & c ) const
+{
+  std::map<std::string,bool>::const_iterator cc = chide.find( c );
+  if ( cc == chide.end() ) return false;
+  return cc->second;
+}
+
+bool cmddefs_t::hidden_param( const std::string & c , const std::string & p ) const
+{
+  std::map<std::string,std::map<std::string,bool> >::const_iterator cc = phide.find( c );
+  if ( cc == phide.end() ) return false;
+  std::map<std::string,bool>::const_iterator pp = cc->second.find( p );
+  if ( pp == cc->second.end() ) return false;
+  return pp->second;
+}
+
+bool cmddefs_t::hidden_table( const std::string & c , const tfac_t & tfac ) const
+{
+  std::map<std::string,std::map<tfac_t,bool> >::const_iterator cc = ohide.find( c );
+  if ( cc == ohide.end() ) return false;
+  std::map<tfac_t,bool>::const_iterator tt = cc->second.find( tfac );
+  if ( tt == cc->second.end() ) return false;
+  return tt->second;
+}
+
+bool cmddefs_t::hidden_var( const std::string & c , const tfac_t & tfac , const std::string & v ) const
+{
+  std::map<std::string,std::map<tfac_t,std::map<std::string,bool> > >::const_iterator cc = vhide.find( c );
+  if ( cc == vhide.end() ) return false;
+  std::map<tfac_t,std::map<std::string,bool> >::const_iterator tt = cc->second.find( tfac );
+  if ( tt == cc->second.end() ) return false;
+  std::map<std::string,bool>::const_iterator vv = tt->second.find( v );
+  if ( vv == tt->second.end() ) return false;
+  return vv->second;
+}
+
+//#pragma GCC pop_options

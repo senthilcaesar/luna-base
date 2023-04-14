@@ -62,7 +62,8 @@ enum frequency_band_t
     HIGH_SIGMA,
     BETA, 
     GAMMA,
-    TOTAL 
+    TOTAL, 
+    DENOM
   };
 
 enum fft_t 
@@ -82,8 +83,9 @@ enum sleep_stage_t
     UNSCORED ,
     MOVEMENT ,
     ARTIFACT ,
-    LIGHTS_ON ,
-    UNKNOWN //  i.e. null marker / not a sleep stage
+    LIGHTS_ON ,    
+    UNKNOWN , //  i.e. null marker / not a sleep stage
+    GAP       // i.e. for EDF+D gaps
   };
 
 
@@ -126,9 +128,9 @@ struct globals
   static std::string date;
 
   // command definitions
-
-  static cmddefs_t cmddefs;
-
+  
+  static cmddefs_t & cmddefs();
+  
   // return code (e.g. for CONTAINS)
   static int retcode;
   
@@ -180,6 +182,10 @@ struct globals
 
   static bool set_0dur_as_ellipsis;
 
+  static std::string annot_disc_segment;
+  static std::string annot_disc_gap;
+  static bool annot_disc_drop_spanning;
+  
   //
   // Annotation types stored here statically;  these can be properties of both 
   // annot_t, in which case they provide a guide for all instance_t.data fields
@@ -251,6 +257,10 @@ struct globals
   static int sample_list_min;
   static int sample_list_max;
   static std::string sample_list_id;
+
+  static bool anon;
+  static std::string force_starttime;
+  static std::string force_startdate;
   
   static bool write_naughty_list;
   static std::string naughty_list;
@@ -289,6 +299,9 @@ struct globals
     
   // function to bail to if needed
   static void (*bail_function) ( const std::string & msg );
+
+  // rediret logger?
+  static void (*logger_function) ( const std::string & msg ); 
   
   // in CGI mode, set this to T
   static bool silent;
@@ -305,6 +318,8 @@ struct globals
 
   static bool problem;
 
+  static bool empty;
+  
   static bool bail_on_fail;
 
   // devel

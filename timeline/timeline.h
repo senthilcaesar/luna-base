@@ -83,6 +83,8 @@ struct timeline_t
 
   void re_init_timeline() { init_timeline( true ); }
 
+  void create_discontinuous_timeline( const std::vector<uint64_t> & tps );
+
   void restructure( const std::set<int> & keep );
 
   
@@ -359,7 +361,8 @@ struct timeline_t
   }
 
   interval_t epoch( const int e ) const
-  { 
+  {
+    if ( e < 0 || e >= epochs.size() ) return interval_t(0LLU,0LLU);
     return epochs[e]; 
   }
  
@@ -453,11 +456,11 @@ struct timeline_t
     return mask[e]; 
   }
 
-  void mask2annot( const std::string & path , const std::string & tag , const bool with_id = true );
+  //  void mask2annot( const std::string & path , const std::string & tag , const bool with_id = true );
 
   void add_mask_annot( const std::string & tag );
   
-  void dumpmask();
+  void dumpmask( const param_t & );
 
   //
   // Channel-specific epoch masks (ch/ep mask)

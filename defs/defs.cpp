@@ -40,15 +40,22 @@ std::string globals::date;
 
 int globals::retcode;
 
-cmddefs_t globals::cmddefs;
+cmddefs_t & globals::cmddefs()
+{
+  static cmddefs_t * ans = new cmddefs_t();
+  return *ans;
+}
 
 //std::string globals::annot_folder;
 std::vector<std::string> globals::annot_files;
 bool globals::allow_space_delim = false;
 char globals::annot_class_inst_combiner = '_';
 bool globals::combine_annot_class_inst = false;
-char globals::class_inst_delimiter = '/';
+char globals::class_inst_delimiter = ':';
 char globals::annot_keyval_delim = '=' ; 
+std::string globals::annot_disc_segment = "segment";
+std::string globals::annot_disc_gap = "gap";
+bool globals::annot_disc_drop_spanning = true;
 
 bool globals::sanitize_everything = true;
 
@@ -121,6 +128,10 @@ int globals::sample_list_min;
 int globals::sample_list_max;
 std::string globals::sample_list_id;
 
+bool globals::anon; 
+std::string globals::force_starttime;
+std::string globals::force_startdate;
+
 bool globals::write_naughty_list;
 std::string globals::naughty_list;
 
@@ -133,6 +144,7 @@ uint64_t globals::tp_1000thsec;
 double globals::tp_duration;
 
 bool globals::problem;
+bool globals::empty;
 
 bool globals::bail_on_fail;
 
@@ -141,6 +153,8 @@ std::map<std::string,sleep_stage_t> sleep_stage_labels;
 param_t globals::param;
 
 void (*globals::bail_function) ( const std::string & );
+
+void (*globals::logger_function) ( const std::string & );
 
 bool globals::silent;
 bool globals::verbose; 
@@ -193,15 +207,23 @@ void globals::init_defs()
   // Version
   //
   
-  version = "v0.27.0";
+  version = "v0.28.0";
   
-  date    = "27-Sep-2022";
+  date    = "10-Apr-2023";
 
   //
   // Return code
   //
 
   retcode = 0;
+
+  //
+  // initialize cmddefs_t (note, using pattern to avoid static initialization issues)
+  //
+  
+  static cmddefs_t & x = cmddefs();
+  x.init();
+  
   
   //
   // Set up RNG
@@ -215,6 +237,12 @@ void globals::init_defs()
   
   bail_function = NULL;
 
+  //
+  // Optional redirect of logger?
+  //
+
+  logger_function = NULL; 
+  
   //
   // Output
   //
@@ -280,14 +308,14 @@ void globals::init_defs()
 
   
   //
-  // Automatically remap NSRR annotations; 
-  // if nsrr-remap=0 is subsequently, set, 
-  // we will call nsrr_t::clear() which wipes
-  // all this
+  // Automatically remap stage annotations; 
+  // nb. if annot-remap=F then this is subsequently wiped
+  //     if nssr-remap=T then we also later call nsrr_t::init_nsrr_mappings()
   //
-
+  
   nsrr_t::init();
 
+  
   //
   // --build
   //
@@ -325,7 +353,10 @@ void globals::init_defs()
   // Primary sleep stage encoding 
   //
 
-  // i.e. to track different schemes, SUDS_N1,  sleep_stage_prefix == "SUDS" 
+  // i.e. to track different schemes, SUDS_N1,  sleep_stage_prefix == "SUDS"
+  // SOAP 's'
+  // POPS 'p' (predicted)
+  
   sleep_stage_prefix       = ""; // by default not  
 
   // if we find 0-duration annots, assume epoch length
@@ -341,6 +372,7 @@ void globals::init_defs()
   sleep_stage[ MOVEMENT ]  = "M";
   sleep_stage[ UNSCORED ]  = "U"; // ambiguous - 'unscorable'
   sleep_stage[ UNKNOWN ]   = "?"; // missing
+  sleep_stage[ GAP ]       = "GAP"; // GAP
 
   // minimal: default
   sleep_stage_labels[ "W" ]     = WAKE;  
@@ -353,19 +385,33 @@ void globals::init_defs()
   sleep_stage_labels[ "?" ]     = UNKNOWN;
   sleep_stage_labels[ "M" ]     = MOVEMENT;  
   sleep_stage_labels[ "L" ]     = LIGHTS_ON;
+  sleep_stage_labels[ "G" ]     = GAP ; 
 
+  
   //
-  // SUDS predictions
+  // POPS predictions
   //
   
-  sleep_stage_labels[ "sW" ]  = WAKE;
-  sleep_stage_labels[ "sN1" ] = NREM1;
-  sleep_stage_labels[ "sN2" ] = NREM2;
-  sleep_stage_labels[ "sN3" ] = NREM3;
-  sleep_stage_labels[ "sR" ]  = REM;
-  sleep_stage_labels[ "s?" ]  = UNKNOWN;
-  
+  // sleep_stage_labels[ "pW" ]  = WAKE;
+  // sleep_stage_labels[ "pN1" ] = NREM1;
+  // sleep_stage_labels[ "pN2" ] = NREM2;
+  // sleep_stage_labels[ "pN3" ] = NREM3;
+  // sleep_stage_labels[ "pR" ]  = REM;
+  // sleep_stage_labels[ "p?" ]  = UNKNOWN;
 
+  
+  // //
+  // // SOAP predictions
+  // //
+  
+  // sleep_stage_labels[ "sW" ]  = WAKE;
+  // sleep_stage_labels[ "sN1" ] = NREM1;
+  // sleep_stage_labels[ "sN2" ] = NREM2;
+  // sleep_stage_labels[ "sN3" ] = NREM3;
+  // sleep_stage_labels[ "sR" ]  = REM;
+  // sleep_stage_labels[ "s?" ]  = UNKNOWN;
+
+  
   //
   // Common/NSRR labels
   //
@@ -398,11 +444,13 @@ void globals::init_defs()
   sleep_stage_labels[ "S4" ] = NREM4;
 
   sleep_stage_labels[ "lights" ] = LIGHTS_ON;
-  sleep_stage_labels[ "lights_on" ] = LIGHTS_ON;
   sleep_stage_labels[ "unknown" ] = UNKNOWN;
   sleep_stage_labels[ "missing" ] = UNKNOWN;
   sleep_stage_labels[ "A" ] = UNKNOWN;
   sleep_stage_labels[ "artifact" ] = UNKNOWN;
+
+  sleep_stage_labels[ "G" ] = GAP;
+  sleep_stage_labels[ "-" ] = GAP;
 
   
   // other NSRR
@@ -514,6 +562,11 @@ void globals::init_defs()
   sample_list_max = -1;
   sample_list_id = "";
 
+  anon = false; 
+
+  force_starttime = "";
+  force_startdate = "";
+  
   write_naughty_list = false;
   naughty_list = "";
   
@@ -533,13 +586,26 @@ void globals::init_defs()
   //  18:00 -> 18:00 (as is)
 
   problem = false;
+  empty = false;
   
   bail_on_fail = true;
   
   edf_timetrack_label = "_TT";
   edf_timetrack_size = 15; // i.e. up to 30 chars
   edf_annot_label = "edf_annot";
-  
+
+
+  // if running 'collapse' EDF+D --> EDF
+  // add annot to show gaps 
+  annot_disc_segment = "segment";
+  annot_disc_gap = "gap";
+  annot_disc_drop_spanning = true;
+  // S1 S1 S1 G1 G1 S2 S2 G2 S3 S3
+
+  // S1 S1 S1 S2 S2 S3 S3
+  // -------- ----- -----
+  // segment1   2     3 
+  // gap     1     2   (2-tp duration marker, so hits both epochs)
   
   // whether to assume 30-sec and enfore epoch check when first attaching 
   // an .eannot file;   default is allow up to 5 epochs difference
@@ -623,6 +689,7 @@ std::string globals::band( frequency_band_t b )
     case HIGH_SIGMA : return "FAST_SIGMA";
     case LOW_SIGMA  : return "SLOW_SIGMA";    
     case TOTAL : return "TOTAL";
+    case DENOM : return "TOTAL";      
     default : return "UNKNOWN";
     } 
 }

@@ -64,7 +64,7 @@ void edf_t::record_table( param_t & param )
 	        << r+1 << "\t" 
 		<< header.nr << "/" << header.nr_all ;
       
-      std::cout << "\t" << interval.as_string() ;
+      std::cout << "\t" << interval.as_string( 4 ) ;
 
       // epoch information?
       
@@ -1336,6 +1336,17 @@ void edf_t::seg_dumper( param_t & param )
 
   bool valid_hms = starttime.valid;
 
+  const bool add_annots = param.has( "annot" );
+  
+  annot_t * a_segs = NULL;
+  annot_t * a_gaps = NULL;
+  
+  if ( add_annots )
+    {
+      a_segs = timeline.annotations.add( globals::annot_disc_segment );
+      a_gaps = timeline.annotations.add( globals::annot_disc_gap );
+    }
+  
   // we only need to consider this for discontinuous EDF+ 
   
   if ( header.continuous || ! header.edfplus )
@@ -1440,11 +1451,30 @@ void edf_t::seg_dumper( param_t & param )
 	  writer.value( "DUR_SEC" , secs2 - secs1 );
 	  writer.value( "DUR_MIN" , ( secs2 - secs1 ) / 60.0);
 	  writer.value( "DUR_HR"  , ( secs2 - secs1 ) / ( 3600.0 ) );
+
+	  // save an annotation?
+	  if ( a_segs != NULL )
+	    {
+	      uint64_t tp_stop = tp0 + header.record_duration_tp;
+	      interval_t interval( tp_start , tp_stop );
+	      // annot instance ID is 1-based count of segments
+	      // i.e. as ++num_segments above
+	      a_segs->add( Helper::int2str( num_segments ) , interval , "." );
+	    }
 	  
 	  // did we observe a gap prior to this?
 	  if ( tp_start > gap_start )
 	    {
-	      gaps.insert( interval_t( gap_start , tp_start ) );	      
+	      gaps.insert( interval_t( gap_start , tp_start ) );
+
+	      if ( a_gaps )
+		{
+		  // set a 1-time-point marker at first time-point of the new segment
+		  // set 1TP past end, i.e. so it will be picked up after a collapse
+		  std::string gn = Helper::int2str( (int)gaps.size() );
+		  a_gaps->add( gn , interval_t( gap_start, tp_start+1LLU ) , "." );
+		}
+	      
 	    }
 
 	  // reset start of next gap to end to this segment	      
@@ -1501,3 +1531,128 @@ void edf_t::seg_dumper( param_t & param )
   writer.unlevel( "GAP" );
   
 }
+
+
+void edf_t::tabulate( param_t & param )
+{
+
+  //
+  // Count # of distinct values w/ at least this many obs
+  //
+
+  std::vector<int> cnts_req;
+  if ( param.has( "req" ) ) cnts_req = param.intvector( "req" );
+  
+  //
+  // Attach signals
+  //
+  
+  const bool no_annotations = true;
+
+  signal_list_t signals = header.signal_list(  param.requires( "sig" ) , no_annotations );
+
+  const int ns = signals.size();
+
+  if ( ns == 0 ) return;
+  
+  //
+  // Numeric precision
+  //
+  
+  const bool use_prec = param.has( "prec" ) ;
+  const int prec = use_prec ? param.requires_int( "prec" ) : 0 ; 
+  if ( prec < 0 ) Helper::halt( "prec must be a positive integer" );
+
+  
+  //
+  // Iterate over each signal
+  //
+
+  timeline.ensure_epoched();
+  
+  for (int s=0; s<ns; s++)
+    {
+      
+      timeline.first_epoch();
+      
+      writer.level( signals.label(s) , globals::signal_strat );
+      
+      std::map<double,int> cnts;
+
+      while ( 1 ) 
+	{
+	  
+	  int epoch = timeline.next_epoch();      
+	  
+	  if ( epoch == -1 ) break;
+	  
+	  interval_t interval = timeline.epoch( epoch );
+	  
+	  slice_t slice( *this , signals(s) , interval );
+	  
+	  const std::vector<double> * d = slice.pdata();
+	  
+	  std::map<double,int> ecnts;	  
+	  
+	  const int np = d->size();
+	  
+	  for (int i=0; i<np; i++)
+	    {
+	      ecnts[ (*d)[i] ]++;
+	      cnts[ (*d)[i] ]++;
+	    }
+
+	  
+	} // next epoch
+      
+
+      //
+      // output
+      //
+
+      
+      // number of distinct values for this channel
+
+      writer.value( "NV" , (int)cnts.size() );
+
+      // if req=X,Y,Z given, then # of distinct values w/ at least
+      // this many obs
+      
+      if ( cnts_req.size() )
+	{
+	  for (int i=0; i < cnts_req.size(); i++)
+	    {
+	      writer.level( cnts_req[i] , "REQ" );
+	      
+	      int cnt = 0;
+	      std::map<double,int>::const_iterator ii = cnts.begin();
+	      while ( ii != cnts.end() )
+		{
+		  if (  ii->second >= cnts_req[i] ) ++cnt;
+		  ++ii;
+		}
+	      writer.value( "NV" , cnt );
+	    }
+	  writer.unlevel( "REQ" );
+	}
+
+
+      //
+      // Basic table
+      //
+      
+      std::map<double,int>::const_iterator ii = cnts.begin();
+      while ( ii != cnts.end() )
+	{
+	  writer.level( ii->first , "VALUE" );
+	  writer.value( "N" , ii->second );
+	  ++ii;
+	}
+      writer.unlevel( "VALUE" );
+      
+      // next signal
+      writer.unlevel( globals::signal_strat );
+    }
+
+}
+

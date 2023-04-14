@@ -105,6 +105,20 @@ struct hypnogram_t
   std::vector<sleep_stage_t> stages;
   std::vector<sleep_stage_t> original_stages;
   std::vector<int> epoch_n;
+  std::vector<double> epoch_dur; // to track gap length
+  std::vector<double> epoch_start; // elapsed seconds
+  std::vector<bool> epoch_gap; // this 'epoch' is actually a gap
+
+  // total epoch count
+  int ne;  // total number of observed epochs (i.e. standard, from timeline)
+  int ne_gaps; // epochs (ne) plus any extra gaps;
+               // epoch_n[], stages[], etc correspond to ne_gaps, not ne;
+
+
+  // standard epoch sizes (for observed epochs)
+  double epoch_sec;
+  double epoch_mins;
+  double epoch_hrs;
   
   // number of conflicting epochs (set to missing)
   int n_conflicts;
@@ -141,6 +155,8 @@ struct hypnogram_t
   int first_persistent_sleep_epoch;  // first persistent sleep epoch
   int final_wake_epoch;     // (epoch)
 
+  // how to handle gaps (by default, missing, but could be 'wake')
+  static sleep_stage_t gap_treatment;
 
   // statistics
   
@@ -180,21 +196,6 @@ struct hypnogram_t
   std::map<std::string,double> bout_mean, bout_med, bout_5, bout_10, bout_max;
 
   std::set<bout_t> bouts;
-
-  // double mins_wake;  // minutes awake
-  // double mins_n1;  // minutes N1
-  // double mins_n2;  // etc
-  // double mins_n3;  // 
-  // double mins_n4;  // 
-  // double mins_rem;  // 
-  // double mins_other;
-
-  // double pct_n1;   // % of sleep that is N1
-  // double pct_n2;   // etc
-  // double pct_n3;   // 
-  // double pct_n4;   // 
-  // double pct_rem;  // 
-  // double pct_other;
 
   //
   // stage distribution stats (devel=T)

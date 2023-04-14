@@ -1,8 +1,12 @@
 include Makefile.inc
 ifeq ($(ARCH),WINDOWS)
   TARGETS = luna destrat behead tocol
-else
-  TARGETS = luna libluna destrat regional behead dmerge tocol fixrows cgi-mapper simassoc
+else	
+  ifdef WASM
+    TARGETS=luna libluna destrat
+  else
+    TARGETS = luna libluna destrat regional behead dmerge tocol fixrows cgi-mapper simassoc
+  endif
 endif
 
 SRCS = globals.cpp eval.cpp cmddefs.cpp \
@@ -33,7 +37,8 @@ SRCS = globals.cpp eval.cpp cmddefs.cpp \
         $(wildcard dsp/libsamplerate/*.cpp) \
         $(wildcard pops/*.cpp) \
         $(wildcard assoc/*.cpp) \
-        $(wildcard lgbm/*.cpp) 
+        $(wildcard lgbm/*.cpp) \
+        $(wildcard web/*.cpp)
 
 CSRCS = $(wildcard db/*.c) \
         $(wildcard stats/*.c) \
@@ -51,6 +56,7 @@ all : $(TARGETS)
 
 luna: main.o $(OBJS)
 	$(CXX) -o $@ $^ $(LDFLAGS)
+
 
 libluna: libluna.a $(SHARED_LIB)
 

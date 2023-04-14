@@ -179,9 +179,9 @@ struct edf_header_t
 
   std::set<int> read( FILE * file, edfz_t * edfz , const std::set<std::string> * inp_signals );
 
-  bool write( FILE * file );
+  bool write( FILE * file , const std::vector<int> & ch2slot );
   
-  bool write( edfz_t * edfz );
+  bool write( edfz_t * edfz , const std::vector<int> & ch2slot );
 
   int  signal( const std::string & s , bool silent = false );
 
@@ -263,9 +263,9 @@ struct edf_record_t
   bool read( int r ); 
 
   // for writing, split out into two separate functions (no particular reason for the differences...)
-  bool write( FILE * file );
+  bool write( FILE * file , const std::vector<int> & ch2slot );
 
-  bool write( edfz_t * );
+  bool write( edfz_t * , const std::vector<int> & ch2slot );
 
   
   void add_data( const std::vector<int16_t> & );
@@ -451,6 +451,8 @@ public:
 
   void data_dumper( const std::string & , const param_t & );
   
+  void tabulate( param_t & param );
+
   void seg_dumper( param_t & param );
   
   void record_dumper( param_t & param );
@@ -658,7 +660,7 @@ public:
 
   bool is_actually_standard_edf(); // i.e. effectively continuous AND no EDF Annots (other than time-track)
   
-  int add_continuous_time_track();
+  int add_time_track( const std::vector<uint64_t> * tps = NULL ); // add EDF+C (or EDF+D) track to the EDF (as Annot channel)
   
   void drop_time_track();
 
@@ -675,7 +677,11 @@ public:
   // Write EDF(Z) back to file
   //
   
-  bool write( const std::string & f , bool edfz = false , bool null_starttime = false , bool always_edfd = false );
+  bool write( const std::string & f , 
+	      bool edfz = false , 
+	      int null_starttime = 0 , 
+	      bool always_edfd = false , 
+	      const std::vector<int> * p_ch2slot = NULL );
   
     
   // given a mask, change the representation in memory, 
@@ -684,6 +690,19 @@ public:
   
   bool restructure();
 
+
+  //
+  // for COPY of edf_ts: read up all records, i.e. make entirely in-memory
+  //  
+  //  int edf_t::read_all();
+
+  //
+  // after copying shallow copy of an edf_t, need to fix things:
+  //
+
+  void update_edf_pointers( edf_t * );
+
+
   
   //
   // extract and realign samples based on a set of annotations
@@ -691,6 +710,15 @@ public:
   
   bool align( const std::vector<std::string> & annots ); 
 
+
+  //
+  // edf-minus & set-timestamps
+  //
+
+  bool edf_minus();
+
+  void set_timestamps( param_t & );
+  
   // empirical recalculate the physical min/max from data (i.e. 
   // instead of relying on the EDF header;  replace the header values
   
